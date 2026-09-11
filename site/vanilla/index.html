@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DataPipe testbed — plain JavaScript</title>
+    <link rel="stylesheet" href="../style.css" />
+  </head>
+  <body class="testbed">
+    <header class="bar">
+      <a href="../">DataPipe testbed</a>
+      <span>Plain JavaScript (no jsPsych, no plugin)</span>
+      <span id="run-settings" class="settings"></span>
+    </header>
+    <main id="target" class="task" tabindex="-1"></main>
+    <div id="actions" class="actions" hidden>
+      <button id="resubmit" type="button">Send the same file again</button>
+      <span class="hint">Expect a rejection: DataPipe refuses a second file with the same name.</span>
+    </div>
+    <section class="log-panel" aria-label="Request log">
+      <h2>Log</h2>
+      <div id="log" class="log"></div>
+    </section>
+    <script type="module" src="./experiment.js"></script>
+  </body>
+</html>

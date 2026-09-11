@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DataPipe testbed</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body class="home">
+    <main>
+      <h1>DataPipe testbed</h1>
+      <p>
+        Test experiments for <a href="https://pipe.jspsych.org">DataPipe</a>, for checking a
+        deployment end to end: one written with jsPsych and
+        <code>@jspsych-contrib/plugin-pipe</code> (including incremental upload), one in plain
+        JavaScript with no libraries at all. They send real data to a real DataPipe experiment,
+        so point them at a test deployment and a test experiment.
+      </p>
+
+      <form id="builder">
+        <label>
+          DataPipe experiment ID
+          <input name="experiment" required autocomplete="off" spellcheck="false" placeholder="e.g. 3kQ9xZt1Lm0p" />
+        </label>
+        <label>
+          DataPipe deployment
+          <select name="base">
+            <option value="https://datapipe-test.web.app">Test — datapipe-test.web.app</option>
+            <option value="https://pipe.jspsych.org">Production — pipe.jspsych.org</option>
+          </select>
+        </label>
+        <div class="row">
+          <label>Trials <input name="trials" type="number" min="1" max="500" value="20" /></label>
+          <label>
+            Format
+            <select name="format">
+              <option value="csv">CSV</option>
+              <option value="json">JSON</option>
+            </select>
+          </label>
+          <label class="check"><input name="auto" type="checkbox" /> Advance trials automatically</label>
+        </div>
+        <fieldset>
+          <legend>jsPsych page</legend>
+          <label class="check"><input name="stream" type="checkbox" checked /> Save as you go (incremental upload)</label>
+          <label class="check"><input name="breaksave" type="checkbox" /> Make the final submission fail</label>
+        </fieldset>
+        <fieldset>
+          <legend>Plain JavaScript page</legend>
+          <label class="check"><input name="session" type="checkbox" /> Start a session first</label>
+          <label class="check"><input name="condition" type="checkbox" /> Request a condition</label>
+          <label class="check"><input name="compress" type="checkbox" checked /> Gzip the submission</label>
+        </fieldset>
+      </form>
+
+      <nav class="links" aria-label="Open a test">
+        <a id="link-jspsych" class="button" href="./jspsych/">Open the jsPsych test</a>
+        <a id="link-vanilla" class="button" href="./vanilla/">Open the plain JavaScript test</a>
+      </nav>
+      <p class="hint" id="link-hint">Enter an experiment ID to enable the links.</p>
+
+      <h2>What to check</h2>
+      <p>
+        Create an experiment on the deployment you are testing (for the test site, sign in at
+        <a href="https://datapipe-test.web.app">datapipe-test.web.app</a>), switch data collection on,
+        and keep its dashboard open in another window while you run these.
+      </p>
+      <ol class="scenarios">
+        <li>
+          <strong>Clean finish</strong> (jsPsych, save as you go). The dashboard shows
+          <em>1 session in progress</em> with a running time while you work; it disappears when you
+          finish, and exactly one file lands in storage.
+        </li>
+        <li>
+          <strong>Abandoned tab.</strong> Close the tab half-way. Within seconds the row reads
+          <em>Connection lost — may resume</em>; after 10 minutes, <em>Stopped — being
+          recovered</em>; within about 15 minutes a <code>.partial.json</code> holding the
+          completed trials appears in storage and the row is gone.
+        </li>
+        <li>
+          <strong>Brief dropout.</strong> In DevTools, set the network to Offline for about 30
+          seconds, then back online, and finish. The row flips to <em>Connection lost</em> and back;
+          you get one complete file and no partial.
+        </li>
+        <li>
+          <strong>Failed final submission</strong> (tick <em>Make the final submission fail</em>).
+          The log shows the save failed; the staged trials come back as a
+          <code>.partial.json</code> within about 15 minutes, not 24 hours.
+        </li>
+        <li>
+          <strong>Baseline without streaming</strong> (untick <em>Save as you go</em>). One file,
+          and no in-progress row at any point.
+        </li>
+        <li>
+          <strong>Plain JavaScript.</strong> One file per run; <em>Send the same file again</em> is
+          rejected as a duplicate; with <em>Start a session first</em> the log shows the session
+          being admitted and the submission still succeeds.
+        </li>
+        <li>
+          <strong>Closed experiment.</strong> Switch data collection off and run the jsPsych test:
+          the log reports that no session was started and the final submission is refused with
+          <code>DATA_COLLECTION_NOT_ACTIVE</code>.
+        </li>
+      </ol>
+      <p class="hint">
+        The plugin build used here is unreleased — see
+        <a href="https://github.com/jspsych/datapipe-testbed/blob/main/site/vendor/plugin-pipe/SOURCE.md">where it came from</a>.
+      </p>
+    </main>
+    <script type="module">
+      const form = document.getElementById("builder");
+      const links = {
+        jspsych: document.getElementById("link-jspsych"),
+        vanilla: document.getElementById("link-vanilla"),
+      };
+      const hint = document.getElementById("link-hint");
+      const STORE = "datapipe-testbed-form";
+
+      // Remember the last settings in this browser only; nothing leaves it.
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORE) || "{}");
+        for (const [name, value] of Object.entries(saved)) {
+          const field = form.elements[name];
+          if (!field) continue;
+          if (field.type === "checkbox") field.checked = value;
+          else field.value = value;
+        }
+      } catch {}
+
+      function update() {
+        const f = form.elements;
+        const common = new URLSearchParams({
+          experiment: f.experiment.value.trim(),
+          base: f.base.value,
+          trials: f.trials.value || "20",
+          format: f.format.value,
+          auto: f.auto.checked ? "1" : "0",
+        });
+        const jspsych = new URLSearchParams(common);
+        jspsych.set("stream", f.stream.checked ? "1" : "0");
+        jspsych.set("breaksave", f.breaksave.checked ? "1" : "0");
+        const vanilla = new URLSearchParams(common);
+        vanilla.set("session", f.session.checked ? "1" : "0");
+        vanilla.set("condition", f.condition.checked ? "1" : "0");
+        vanilla.set("compress", f.compress.checked ? "1" : "0");
+        links.jspsych.href = `./jspsych/?${jspsych}`;
+        links.vanilla.href = `./vanilla/?${vanilla}`;
+
+        const ready = f.experiment.value.trim().length > 0;
+        for (const a of Object.values(links)) a.setAttribute("aria-disabled", String(!ready));
+        hint.hidden = ready;
+
+        try {
+          const values = {};
+          for (const el of form.elements) {
+            if (el.name) values[el.name] = el.type === "checkbox" ? el.checked : el.value;
+          }
+          localStorage.setItem(STORE, JSON.stringify(values));
+        } catch {}
+      }
+
+      for (const a of Object.values(links)) {
+        a.addEventListener("click", (event) => {
+          if (a.getAttribute("aria-disabled") === "true") {
+            event.preventDefault();
+            form.elements.experiment.focus();
+          }
+        });
+      }
+      form.addEventListener("input", update);
+      update();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DataPipe testbed — jsPsych + plugin-pipe</title>
+    <link rel="stylesheet" href="https://unpkg.com/jspsych@8.3.0/css/jspsych.css" />
+    <link rel="stylesheet" href="../style.css" />
+    <!-- jsPsych and a trial plugin from the CDN, pinned. -->
+    <script src="https://unpkg.com/jspsych@8.3.0"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@2.2.0"></script>
+    <!--
+      plugin-pipe is NOT loaded from the CDN: the build with incremental upload
+      is unreleased. This is the committed browser bundle -- see
+      vendor/plugin-pipe/SOURCE.md for exactly which commit it was built from.
+    -->
+    <script src="../vendor/plugin-pipe/index.browser.min.js"></script>
+  </head>
+  <body class="testbed">
+    <header class="bar">
+      <a href="../">DataPipe testbed</a>
+      <span>jsPsych + plugin-pipe</span>
+      <span id="run-settings" class="settings"></span>
+    </header>
+    <main id="target"></main>
+    <section class="log-panel" aria-label="Request log">
+      <h2>Log</h2>
+      <div id="log" class="log"></div>
+    </section>
+    <script type="module" src="./experiment.js"></script>
+  </body>
+</html>
