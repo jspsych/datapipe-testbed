@@ -4,7 +4,7 @@ Test experiments for [DataPipe](https://pipe.jspsych.org), for checking a
 deployment end to end. Published at **https://jspsych.github.io/datapipe-testbed/**.
 
 - **jsPsych page** (`site/jspsych/`) — jsPsych 8 with
-  [`@jspsych/extension-pipe`](https://github.com/jspsych/jsPsych/tree/main/packages/extension-pipe).
+  [`@jspsych/extension-pipe`](https://www.npmjs.com/package/@jspsych/extension-pipe).
   Registering the extension is the whole integration: no save trial, no `await`,
   no session variable. Trials are staged as they happen and abandoned sessions
   are recovered. Written exactly the way the extension's docs tell researchers
@@ -48,25 +48,14 @@ Nothing here is secret: DataPipe experiment IDs are public by design, and none
 is committed — they come from the URL. Do point tests at a *test* experiment:
 they send real data to real storage.
 
-## The unreleased extension
+## Versions
 
-`@jspsych/extension-pipe` is not published yet, so its browser bundle is
-committed in `site/vendor/extension-pipe/`, with
-[`SOURCE.md`](site/vendor/extension-pipe/SOURCE.md) recording the exact commit
-it was built from. Running the unreleased build before it ships is the point of
-this repository. To rebuild it from a local checkout of jsPsych:
-
-```sh
-scripts/refresh-extension.sh ../jsPsych
-```
-
-`datapipe-client` needs no vendoring — it is published, and the plain
-JavaScript page loads it from the CDN at a pinned version. It is also bundled
-inside the extension's browser build, which is why that file is ~185 KB.
-
-Once the extension publishes, point `site/jspsych/index.html` at
-`https://unpkg.com/@jspsych/extension-pipe` and delete `site/vendor/` and
-`scripts/refresh-extension.sh`.
+Everything loads from the CDN at a pinned version: jsPsych, the trial plugin,
+`@jspsych/extension-pipe` (which bundles `datapipe-client` and Firebase, hence
+its size), and `datapipe-client` on the plain JavaScript page. Pinning is what
+makes a test result say which release it checked. To test a new release, bump
+the version in `site/jspsych/index.html` or `site/vanilla/index.html`, and in
+the note at the bottom of `site/index.html` that names the versions under test.
 
 ## Deploying
 
