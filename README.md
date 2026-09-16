@@ -4,13 +4,16 @@ Test experiments for [DataPipe](https://pipe.jspsych.org), for checking a
 deployment end to end. Published at **https://jspsych.github.io/datapipe-testbed/**.
 
 - **jsPsych page** (`site/jspsych/`) — jsPsych 8 with
-  [`@jspsych-contrib/plugin-pipe`](https://github.com/jspsych/jspsych-contrib/tree/main/packages/plugin-pipe),
-  including **incremental upload** (trials staged as they happen, abandoned
-  sessions recovered). Written exactly the way the plugin's docs tell
-  researchers to write it, so it also checks that the documented pattern works.
-- **Plain JavaScript page** (`site/vanilla/`) — no jsPsych, no plugin, no
-  libraries. Every DataPipe call is a bare `fetch`: condition assignment, the
-  session endpoint, and the submission (optionally gzipped).
+  [`@jspsych/extension-pipe`](https://github.com/jspsych/jsPsych/tree/main/packages/extension-pipe).
+  Registering the extension is the whole integration: no save trial, no `await`,
+  no session variable. Trials are staged as they happen and abandoned sessions
+  are recovered. Written exactly the way the extension's docs tell researchers
+  to write it, so it also checks that the documented pattern works.
+- **Plain JavaScript page** (`site/vanilla/`) — no jsPsych and no framework, using
+  [`datapipe-client`](https://www.npmjs.com/package/datapipe-client) for staging
+  and condition assignment, and a bare `fetch` for the submission (optionally
+  gzipped). **Streaming without jsPsych is new**: while the staging client lived
+  inside the jsPsych plugin there was no way to reach it from a page like this.
 
 Both pages log every request and response on screen, so a run can be checked
 without DevTools — including on a phone, where flaky connections are easiest
@@ -45,19 +48,25 @@ Nothing here is secret: DataPipe experiment IDs are public by design, and none
 is committed — they come from the URL. Do point tests at a *test* experiment:
 they send real data to real storage.
 
-## The unreleased plugin
+## The unreleased extension
 
-The streaming build of plugin-pipe is not published yet, so its browser
-bundle is committed in `site/vendor/plugin-pipe/`, with
-[`SOURCE.md`](site/vendor/plugin-pipe/SOURCE.md) recording the exact commit it
-was built from. To rebuild it from a local checkout of jspsych-contrib:
+`@jspsych/extension-pipe` is not published yet, so its browser bundle is
+committed in `site/vendor/extension-pipe/`, with
+[`SOURCE.md`](site/vendor/extension-pipe/SOURCE.md) recording the exact commit
+it was built from. Running the unreleased build before it ships is the point of
+this repository. To rebuild it from a local checkout of jsPsych:
 
 ```sh
-scripts/refresh-plugin.sh ../jspsych-contrib
+scripts/refresh-extension.sh ../jsPsych
 ```
 
-Once plugin-pipe 0.7 is on npm, delete `site/vendor/` and load it from the
-CDN like jsPsych.
+`datapipe-client` needs no vendoring — it is published, and the plain
+JavaScript page loads it from the CDN at a pinned version. It is also bundled
+inside the extension's browser build, which is why that file is ~185 KB.
+
+Once the extension publishes, point `site/jspsych/index.html` at
+`https://unpkg.com/@jspsych/extension-pipe` and delete `site/vendor/` and
+`scripts/refresh-extension.sh`.
 
 ## Deploying
 

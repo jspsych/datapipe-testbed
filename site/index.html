@@ -12,9 +12,10 @@
       <p>
         Test experiments for <a href="https://pipe.jspsych.org">DataPipe</a>, for checking a
         deployment end to end: one written with jsPsych and
-        <code>@jspsych-contrib/plugin-pipe</code> (including incremental upload), one in plain
-        JavaScript with no libraries at all. They send real data to a real DataPipe experiment,
-        so point them at a test deployment and a test experiment.
+        <code>@jspsych/extension-pipe</code>, one in plain JavaScript using
+        <code>datapipe-client</code>. Both stage each trial as it happens. They send real data
+        to a real DataPipe experiment, so point them at a test deployment and a test
+        experiment.
       </p>
 
       <form id="builder">
@@ -41,13 +42,16 @@
           <label class="check"><input name="auto" type="checkbox" /> Advance trials automatically</label>
         </div>
         <fieldset>
-          <legend>jsPsych page</legend>
+          <legend>Both pages</legend>
           <label class="check"><input name="stream" type="checkbox" checked /> Save as you go (incremental upload)</label>
+        </fieldset>
+        <fieldset>
+          <legend>jsPsych page</legend>
           <label class="check"><input name="breaksave" type="checkbox" /> Make the final submission fail</label>
+          <label>Abort at trial <input name="abort" type="number" min="0" max="500" value="0" /> <span class="hint">0 = run to the end</span></label>
         </fieldset>
         <fieldset>
           <legend>Plain JavaScript page</legend>
-          <label class="check"><input name="session" type="checkbox" /> Start a session first</label>
           <label class="check"><input name="condition" type="checkbox" /> Request a condition</label>
           <label class="check"><input name="compress" type="checkbox" checked /> Gzip the submission</label>
         </fieldset>
@@ -84,17 +88,35 @@
         </li>
         <li>
           <strong>Failed final submission</strong> (tick <em>Make the final submission fail</em>).
-          The log shows the save failed; the staged trials come back as a
-          <code>.partial.json</code> within about 15 minutes, not 24 hours.
+          The page claims the filename first, so DataPipe refuses the real submission as a
+          duplicate. The log shows the save failed; the staged trials come back as a
+          <code>.partial.json</code> within about 15 minutes, not 24 hours. Note the partial
+          carries a hash suffix, because the plain filename is taken.
+        </li>
+        <li>
+          <strong>Ended early</strong> (set <em>Abort at trial</em> to something below your trial
+          count). The experiment stops as a failed attention check would. <strong>The data is
+          still submitted</strong> — this is the behaviour a save trial never had, because an
+          aborted timeline never reaches one.
         </li>
         <li>
           <strong>Baseline without streaming</strong> (untick <em>Save as you go</em>). One file,
           and no in-progress row at any point.
         </li>
         <li>
-          <strong>Plain JavaScript.</strong> One file per run; <em>Send the same file again</em> is
-          rejected as a duplicate; with <em>Start a session first</em> the log shows the session
-          being admitted and the submission still succeeds.
+          <strong>Plain JavaScript, streaming.</strong> The same recovery behaviour with no
+          framework at all — an in-progress row while it runs, one file at the end. This was
+          impossible until the staging client moved out of the jsPsych plugin.
+        </li>
+        <li>
+          <strong>Plain JavaScript, conditions.</strong> With <em>Request a condition</em> ticked,
+          the log shows the assigned number. Switch condition assignment off on the dashboard and
+          run again: the page reports that <code>getCondition</code> threw and refuses to start,
+          rather than running an unassigned participant.
+        </li>
+        <li>
+          <strong>Duplicate rejection.</strong> On the plain JavaScript page, <em>Send the same
+          file again</em> is refused.
         </li>
         <li>
           <strong>Closed experiment.</strong> Switch data collection off and run the jsPsych test:
@@ -103,8 +125,9 @@
         </li>
       </ol>
       <p class="hint">
-        The plugin build used here is unreleased — see
-        <a href="https://github.com/jspsych/datapipe-testbed/blob/main/site/vendor/plugin-pipe/SOURCE.md">where it came from</a>.
+        The extension build used here is unreleased — see
+        <a href="https://github.com/jspsych/datapipe-testbed/blob/main/site/vendor/extension-pipe/SOURCE.md">where it came from</a>.
+        <code>datapipe-client</code> is loaded from the CDN, pinned.
       </p>
     </main>
     <script type="module">
@@ -136,11 +159,11 @@
           format: f.format.value,
           auto: f.auto.checked ? "1" : "0",
         });
+        common.set("stream", f.stream.checked ? "1" : "0");
         const jspsych = new URLSearchParams(common);
-        jspsych.set("stream", f.stream.checked ? "1" : "0");
         jspsych.set("breaksave", f.breaksave.checked ? "1" : "0");
+        jspsych.set("abort", f.abort.value || "0");
         const vanilla = new URLSearchParams(common);
-        vanilla.set("session", f.session.checked ? "1" : "0");
         vanilla.set("condition", f.condition.checked ? "1" : "0");
         vanilla.set("compress", f.compress.checked ? "1" : "0");
         links.jspsych.href = `./jspsych/?${jspsych}`;

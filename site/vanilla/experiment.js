@@ -1,33 +1,35 @@
-// A tiny experiment with no jsPsych and no plugin: every DataPipe call is a
-// plain fetch(), exactly as the "Plain JavaScript" section of DataPipe's docs
-// describes. It exercises the API a researcher calls by hand:
+// A tiny experiment with no jsPsych: every DataPipe call is either a plain
+// fetch() or a datapipe-client call, exactly as the "Plain JavaScript" section
+// of DataPipe's docs describes.
 //
-//   POST /api/condition   (?condition=1)  condition assignment
-//   POST /api/session     (?session=1)    admit a session; nothing is staged
-//                                         from this page, but the final save
-//                                         carries the session id so DataPipe
-//                                         drops the (empty) session
-//   POST /api/data                        the submission itself, optionally
+//   POST /api/data                        the submission, optionally
 //                                         gzip-compressed (?compress=0 to send
 //                                         it plain)
+//   DataPipe.getCondition  (?condition=1) condition assignment, which THROWS on
+//                                         failure -- the one call in the
+//                                         library that does
+//   DataPipe.createSession (?stream=1)    stage each trial as it happens
 //
-// Incremental upload itself is not tested here: staging trials without the
-// plugin would mean hand-copying its Realtime Database logic, which is not a
-// documented path. The jsPsych page covers streaming.
+// Streaming from a page with no framework is new. While the staging client
+// lived inside the jsPsych plugin there was no way to reach it without jsPsych,
+// so this half of the testbed could only ever submit once at the end. That is
+// the main thing this page now exists to prove.
 
 import {
   readParams,
   log,
+  mirrorClientWarnings,
   describeRun,
   requireExperiment,
   makeFilename,
 } from "../common.js";
 
 const params = readParams();
+mirrorClientWarnings();
 describeRun(params, {
   trials: params.trials,
   format: params.format,
-  session: params.session ? "on" : "off",
+  stream: params.stream ? "on" : "off",
   condition: params.condition ? "on" : "off",
   compress: params.compress ? "on" : "off",
   auto: params.auto ? "on" : "off",
@@ -118,18 +120,33 @@ async function main() {
   const filename = makeFilename(participantId, params.format);
   log(`filename ${filename}`);
 
-  if (params.condition) {
-    await post("condition", { experimentID: params.experiment });
-  }
+  DataPipe.setBaseURL(params.base);
 
-  let sessionId;
-  if (params.session) {
-    const { status, body } = await post("session", { experimentID: params.experiment, filename });
-    if (status === 200 && body?.sessionId) {
-      sessionId = body.sessionId;
-      log(`session admitted (id ${sessionId.slice(0, 6)}…); staging database ${body.databaseURL}`);
+  if (params.condition) {
+    // The one call in this library that throws. A condition decides which
+    // timeline a participant runs, so there is no safe value to fall back to;
+    // catching it and showing something is the documented pattern.
+    try {
+      const condition = await DataPipe.getCondition({ experimentID: params.experiment });
+      log(`condition assigned: ${condition}`);
+    } catch (error) {
+      log("getCondition THREW -- the designed behaviour on failure", error);
+      target.innerHTML =
+        '<p class="notice">The experiment could not be started: no condition was assigned.</p>';
+      return;
     }
   }
+
+  // Synchronous on purpose: the /api/session round trip is still in flight,
+  // and trials recorded before it lands are buffered rather than dropped.
+  const session = params.stream
+    ? DataPipe.createSession({ experimentID: params.experiment, filename })
+    : null;
+  log(
+    params.stream
+      ? "streaming ON -- trials are staged as they happen"
+      : "streaming OFF -- one submission at the end"
+  );
 
   target.innerHTML =
     `<p><strong>DataPipe test run.</strong> ${params.trials} trials.</p>` +
@@ -141,22 +158,43 @@ async function main() {
   await waitForKey();
 
   const rows = [];
-  for (let i = 0; i < params.trials; i++) rows.push(await runTrial(i));
+  for (let i = 0; i < params.trials; i++) {
+    const row = await runTrial(i);
+    rows.push(row);
+    // One line is the whole streaming integration for a page with no
+    // framework. Safe to call whether or not the session started.
+    session?.record(row);
+  }
 
   target.innerHTML = "<p>Saving data…</p>";
   const data = params.format === "json" ? JSON.stringify(rows) : toCSV(rows);
-  const submission = {
-    experimentID: params.experiment,
-    filename,
-    data,
-    ...(sessionId ? { sessionId } : {}),
-  };
-  const { status } = await post("data", submission, { compress: params.compress });
 
-  target.innerHTML =
-    status === 201 || status === 202
-      ? `<p class="notice">Saved (${status}). Check the experiment's dashboard and your storage.</p>`
-      : `<p class="notice">The submission was not accepted (${status || "no response"}). See the log.</p>`;
+  // Flush BEFORE reading sessionId. flush() waits for the session to start,
+  // and until it has, sessionId is an empty string -- submitting without it
+  // would leave DataPipe unable to match this file to the staged copy, which
+  // it would then recover separately as a spurious .partial.json.
+  await session?.flush();
+
+  const { status } = await post(
+    "data",
+    {
+      experimentID: params.experiment,
+      filename,
+      data,
+      ...(session?.sessionId ? { sessionId: session.sessionId } : {}),
+    },
+    { compress: params.compress }
+  );
+
+  const ok = status === 201 || status === 202;
+  // Tell the session what happened. On success the abandonment marker is
+  // cancelled; on failure it is written now, so the staged trials are
+  // recovered on the sweep rather than waiting out the 24-hour expiry.
+  await session?.close({ submitted: ok });
+
+  target.innerHTML = ok
+    ? `<p class="notice">Saved (${status}). Check the experiment's dashboard and your storage.</p>`
+    : `<p class="notice">The submission was not accepted (${status || "no response"}). See the log.</p>`;
 
   const actions = document.getElementById("actions");
   actions.hidden = false;

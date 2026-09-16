@@ -26,13 +26,17 @@ export function readParams() {
     // Trials advance on their own, so a long session can be abandoned
     // part-way without pressing keys for minutes.
     auto: flag(q.get("auto"), false),
-    // jsPsych page: stage trials as they happen (the feature under test).
+    // Both pages: stage trials as they happen (the feature under test). The
+    // plain-JavaScript page can do this too now that the client is its own
+    // package -- while staging lived inside the jsPsych plugin it could not.
     stream: flag(q.get("stream"), true),
-    // jsPsych page: send the final submission to a URL that cannot answer, to
-    // exercise the "submission failed, recover the staged copy" path.
+    // Claim the filename before the run ends, so DataPipe refuses the final
+    // submission as a duplicate and the staged copy has to be recovered.
     breaksave: flag(q.get("breaksave"), false),
-    // Plain-JS page: call /api/session first, and /api/condition.
-    session: flag(q.get("session"), false),
+    // End the experiment at this trial, the way a failed attention check
+    // would. 0 disables. jsPsych page only.
+    abort: Number.parseInt(q.get("abort") ?? "0", 10) || 0,
+    // Plain-JS page: request a condition before the timeline is built.
     condition: flag(q.get("condition"), false),
     compress: flag(q.get("compress"), true),
   };
@@ -62,16 +66,20 @@ function stringify(value) {
 }
 
 /**
- * Mirror the plugin's own console warnings into the page log. plugin-pipe
- * reports every degraded path (session refused, flush failed, slot cap
- * reached) as a console.warn prefixed "plugin-pipe:", and those are exactly
- * what a tester needs to see without opening DevTools on a phone.
+ * Mirror the extension's and the client's console warnings into the page log.
+ *
+ * Both report every degraded path -- session refused, flush failed, trial too
+ * large, disconnect-slot cap reached -- as a console.warn prefixed
+ * "extension-pipe:" or "datapipe:". Those are exactly what a tester needs to
+ * see, and exactly what is invisible on a phone with no DevTools.
  */
-export function mirrorPluginWarnings() {
+const WARN_PREFIXES = ["extension-pipe:", "datapipe:"];
+
+export function mirrorClientWarnings() {
   const original = console.warn.bind(console);
   console.warn = (...args) => {
     original(...args);
-    if (typeof args[0] === "string" && args[0].startsWith("plugin-pipe:")) {
+    if (typeof args[0] === "string" && WARN_PREFIXES.some((p) => args[0].startsWith(p))) {
       const line = document.createElement("div");
       line.className = "log-line log-warn";
       line.textContent = `${new Date().toLocaleTimeString([], { hour12: false })}  ${args

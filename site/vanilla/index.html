@@ -9,7 +9,7 @@
   <body class="testbed">
     <header class="bar">
       <a href="../">DataPipe testbed</a>
-      <span>Plain JavaScript (no jsPsych, no plugin)</span>
+      <span>Plain JavaScript (no jsPsych) + datapipe-client</span>
       <span id="run-settings" class="settings"></span>
     </header>
     <main id="target" class="task" tabindex="-1"></main>
@@ -21,6 +21,12 @@
       <h2>Log</h2>
       <div id="log" class="log"></div>
     </section>
+    <!--
+      datapipe-client IS on the CDN -- it published as 0.1.0. Pinned, because a
+      testbed that silently follows `latest` stops telling you which version
+      you tested. It defines a `DataPipe` global.
+    -->
+    <script src="https://unpkg.com/datapipe-client@0.1.0/dist/datapipe-client.browser.global.js"></script>
     <script type="module" src="./experiment.js"></script>
   </body>
 </html>
