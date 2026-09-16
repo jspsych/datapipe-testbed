@@ -10,16 +10,14 @@
     <script src="https://unpkg.com/jspsych@8.3.0"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response@2.2.0"></script>
     <!--
-      extension-pipe is NOT loaded from the CDN: it is unreleased. This is the
-      committed browser bundle -- see vendor/extension-pipe/SOURCE.md for the
-      commit it was built from. Swap this for
-      https://unpkg.com/@jspsych/extension-pipe once it publishes; running the
-      unreleased build first is the whole point of the testbed.
+      extension-pipe from the CDN, pinned like everything else here: a testbed
+      that silently follows `latest` stops telling you which version you tested.
+      Bump it deliberately when a new release needs checking.
 
       datapipe-client is not loaded separately here: the extension's browser
       bundle already contains it, and Firebase, inside.
     -->
-    <script src="../vendor/extension-pipe/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/extension-pipe@0.2.0"></script>
   </head>
   <body class="testbed">
     <header class="bar">
