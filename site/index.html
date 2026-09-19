@@ -82,6 +82,11 @@
         <a href="https://datapipe-test.web.app">datapipe-test.web.app</a>), switch data collection on,
         and keep its dashboard open in another window while you run these.
       </p>
+      <p class="hint">
+        <strong>Run them in this order.</strong> Switching data collection off for the last one
+        while an earlier session is still staged destroys that session&rsquo;s recovery — the sweep
+        discards staged trials for an experiment that is no longer accepting data.
+      </p>
       <ol class="scenarios" id="scenarios"></ol>
       <p class="hint" id="scenarios-status">Loading the scenario list…</p>
       <p class="hint">
@@ -204,7 +209,13 @@
       fetch("./scenarios.json")
         .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
         .then((manifest) => {
-          scenarios = manifest.scenarios ?? [];
+          // Sorted by `order`, not by position in the file: the order is
+          // load-bearing. Running the closed-experiment scenario early
+          // destroys the staged sessions the recovery scenarios are waiting
+          // on -- see the manifest's `ordering` block.
+          scenarios = [...(manifest.scenarios ?? [])].sort(
+            (a, b) => (a.order ?? 0) - (b.order ?? 0)
+          );
           pages = manifest.defaults?.pages ?? pages;
           listEl.innerHTML = scenarios
             .map(
@@ -215,6 +226,8 @@
                   <span class="tag">${escapeHtml(s.page)}</span>
                   <span class="tag">${escapeHtml(s.automation)}</span>
                   ${s.deferredCheck ? '<span class="tag">deferred storage check</span>' : ""}
+                  ${s.mustRunLast ? '<span class="tag">run this last</span>' : ""}
+                  ${s.mutatesExperimentState ? '<span class="tag">changes a dashboard setting</span>' : ""}
                 </div>
               </li>`
             )

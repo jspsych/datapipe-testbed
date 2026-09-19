@@ -2,6 +2,7 @@
   "schema": 1,
   "updated": "2026-09-19",
   "about": "The end-to-end scenarios for a DataPipe deployment, as data rather than prose. site/index.html renders its \"What to check\" list from this file, and the e2e-testbed skill in the datapipe repo drives it. Add `experiment`, `base` and `run` to each scenario's params to build a URL.",
+  "observed": "Parts of this manifest were checked against https://datapipe-test.web.app at commit a10464c on 2026-09-19. Each scenario carries an `observed` field saying what that run actually saw. Everything else is derived from the handler code and is still unconfirmed against a live deployment.",
   "defaults": {
     "base": "https://datapipe-test.web.app",
     "pages": {
@@ -9,24 +10,58 @@
       "vanilla": "vanilla/"
     },
     "runParam": "run",
-    "resultContract": "window.__testbed (schema 1); document.documentElement.dataset.testbedStatus and #testbed-result mirror it for drivers that cannot evaluate JavaScript."
+    "resultContract": "Read `document.documentElement.dataset.testbedStatus` and the JSON text of `#testbed-result` from the DOM. `window.__testbed` holds the same object, but a browser extension evaluating JavaScript in an isolated world may not see a page global -- prefer the DOM."
   },
   "preconditions": {
     "experiment": "A fresh experiment on the deployment under test, storing to Google Drive (new experiments cannot choose OSF). Record its ID.",
     "dataCollection": "\"Accept new data\" ON, except where a scenario says otherwise.",
+    "validation": "A NEW EXPERIMENT SHIPS WITH VALIDATION ON and one required field, `trial_type` (create-experiment.ts: `useValidation ?? true`, `requiredFields ?? [\"trial_type\"]`). The plain-JavaScript page emits `trial_index, task, stimulus, response, rt, correct` and has no `trial_type`, so EVERY vanilla scenario is refused with 400 INVALID_DATA until you either remove the `trial_type` chip or switch \"Check submissions before storing them\" off. Do this during setup.",
+    "metadata": "\"Generate Psych-DS metadata\" LOCKS PERMANENTLY once the experiment has data (\"Locked because this experiment has collected data\"). Decide before the first submission. With it on, raw files move from the folder root to data/raw/, derived CSVs appear beside them, and a submission that is not parseable CSV/JSON is refused with METADATA_ERROR.",
     "conditions": "\"Assign conditions in sequence\" OFF by default; the condition scenarios switch it.",
-    "base64": "\"Accept base64 file uploads\" OFF by default; the base64 scenarios switch it.",
-    "metadata": "Psych-DS metadata OFF by default. With it ON every expectStorage path below moves from the folder root to data/raw/."
+    "base64": "\"Accept base64 file uploads\" OFF by default; the base64 scenarios switch it."
+  },
+  "ordering": {
+    "rule": "Run scenarios in `order`. A scenario that changes experiment-level state (`mutatesExperimentState`) affects every scenario after it, and one with `mustRunLast` must not run before the scenarios in its `runAfter` have met their `runAfterCondition`.",
+    "why": "Observed 2026-09-19: switching \"Accept new data\" off for `closed-experiment` while an earlier session was still staged DESTROYED that session's recovery. The staging sweep re-checks the experiment before promoting anything (scheduled-staging-sweep.ts, \"THE SECOND DOOR\") and discards staged trials outright when `active` is false. The run then looked like a recovery bug that does not exist.",
+    "alternative": "Run `closed-experiment` on a second throwaway experiment instead, and the ordering constraint goes away."
   },
   "timingFacts": {
     "abandonGraceMinutes": 10,
-    "sweepCron": "*/5 (staging sweep and upload retry share one scheduledsweep function)",
+    "sweepCron": "*/5 (staging sweep and upload retry every tick; pending recovery on the :00/:15/:30/:45 slots; mail retry on :00/:10/...)",
     "recoveredPartialFirstAttemptMinutes": 60,
-    "note": "A recovered session is QUEUED by the sweep, not uploaded by it. queue-upload.ts gives an entry with no provider error code nextRetryAt = now + 1 hour, and the retry worker runs on */5 -- so a partial file reaches storage roughly 65-75 minutes after the participant dropped out, not 15. For that hour the dashboard's queue panel describes it as an upload that did not go through. That is expected, not a bug."
+    "observedAbandonToQueueMinutes": 12,
+    "note": "A recovered session is QUEUED by the sweep, not uploaded by it. queue-upload.ts gives an entry with no provider error code nextRetryAt = now + 1 hour, and the retry worker runs on */5 -- so a partial file reaches storage roughly 65-75 minutes after the participant dropped out, not 15. For that hour the dashboard's queue panel describes it as an upload that did not go through, with retryCount 0 and lastAttemptAt null. That is expected, not a bug.",
+    "whenTheClockStarts": "For an abandoned tab, at the socket drop -- an open tab counts as live. For a refused final submission, datapipe-client stamps the session abandoned IMMEDIATELY (packages/client/src/session.ts, `close({submitted:false})`), so the clock starts at the refusal; whether @jspsych/extension-pipe does the same is not verified, so close the tab promptly afterwards either way. The 24-hour `expiresAt` is the backstop behind both.",
+    "observedPageRates": "jsPsych page with auto=1: 1.1-1.7 s per trial. Vanilla page with auto=1: 400 ms per trial. A /api/data call that writes to Drive: 2-4.5 s."
   },
+  "knownIssues": [
+    {
+      "id": "psychds-ignore-duplicates",
+      "summary": "On Google Drive, one `.psychds-ignore` file accumulates per successful upload rather than one per experiment. metadata-derived-upload.ts dedupes on the provider's NAME_CONFLICT, and Drive permits duplicate names, so the dedupe never fires.",
+      "consequence": "Never assert on the TOTAL number of files in the folder. Count the files matching this run's filename stem instead.",
+      "observed": "5 copies after 5 uploads, 2026-09-19. A pre-existing DataPipe bug, not a testbed one."
+    },
+    {
+      "id": "metadata-error-is-recovered-later",
+      "summary": "A submission refused with 400 METADATA_ERROR keeps its pending Cloud Storage copy on purpose (api-data.ts: \"scheduled-pending-recovery salvages it later instead of losing it outright\"). METADATA_ERROR means metadata generation failed, not that the participant's data was refused, and the policy is never to destroy raw data over it.",
+      "consequence": "Within the next pending-recovery slot (:00/:15/:30/:45, for entries older than ~15 minutes) a queue entry appears for that filename with failureReason \"Recovered from interrupted upload (server restart or memory limit)\". EXPECT it. Do not flag it. The wording is misleading for this case -- no server restarted.",
+      "observed": "3 such entries at 17:15 UTC, 2026-09-19, one per METADATA_ERROR refusal."
+    },
+    {
+      "id": "assert-on-code-never-message",
+      "summary": "metadata-block.ts returns `{...MESSAGES.METADATA_ERROR, message: errorMessage}` -- it overrides the message with the specific failure text, so the wire message for METADATA_ERROR is not the string in api-messages.ts.",
+      "consequence": "Assert on the `error` code. Never on `message`, for any endpoint."
+    },
+    {
+      "id": "sessions-from-pages-that-never-ran",
+      "summary": "Loading the jsPsych page starts a session before any trial runs, so a page opened and navigated away from leaves a live-session row behind until the sweep clears it.",
+      "consequence": "Never assert on the NUMBER of sessions in progress. Match rows by this run's `run` id."
+    }
+  ],
   "scenarios": [
     {
       "id": "clean-finish",
+      "order": 1,
       "title": "Clean finish",
       "description": "jsPsych with save-as-you-go. The dashboard shows one session in progress with a running time while you work; it disappears when you finish, and exactly one file lands in storage.",
       "page": "jspsych",
@@ -38,159 +73,28 @@
         "notes": ["expect an `extension-pipe:` note only if something degraded"]
       },
       "expectDashboard": [
-        "While running: a \"Sessions in progress\" panel with one row reading \"In progress\" and a \"Running for\" value.",
-        "Within ~30 s of the page reporting finished: the panel is gone (it is only rendered while a session is open).",
-        "No queue panel."
+        "While running: a \"Sessions in progress\" panel with a row reading \"In progress\" and a \"Running for\" value. Match the row, not the count.",
+        "Within ~30 s of the page reporting finished: that row is gone.",
+        "No new queue entry for this run's filename."
       ],
       "expectStorage": {
         "files": 1,
-        "naming": "testbed-<run>-<stamp>-<pid>.csv, exactly the single name in __testbed.filenames",
-        "completeness": "complete",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
+        "countBy": "files matching this run's filename stem; ignore `.psychds-ignore` and the derived Psych-DS copies",
+        "naming": "testbed-<run>-<stamp>-<pid>.csv, exactly the name in the result's filenames",
+        "completeness": "complete: a header row, the instruction trial, and one row per trial",
+        "location": "experiment folder root, or data/raw/ with metadata on (plus a derived subject-..._data.csv beside it)"
       },
       "timing": {
-        "pageRun": "~20 s with auto=1 and trials=20",
+        "pageRun": "~30 s (observed 1.1-1.7 s per trial with auto=1)",
         "checkDashboardAfter": "during the run, and again ~30 s after it finishes",
         "checkStorageAfter": "~30 s after the page reports finished"
       },
-      "automation": "full"
-    },
-    {
-      "id": "abandoned-tab",
-      "title": "Abandoned tab",
-      "description": "Close the tab half-way. Within seconds the dashboard row reads `Connection lost — may resume`; after 10 minutes, `Stopped — being recovered`; the sweep then queues the staged trials, and the `.partial.json` reaches storage about an hour later, not within 15 minutes.",
-      "page": "jspsych",
-      "params": { "trials": "200", "format": "csv", "auto": "1", "stream": "1" },
-      "driverActions": [
-        "Open the URL in a new tab and let it run for about 20 seconds (~50 trials of 200).",
-        "Read window.__testbed once, and keep the filename from __testbed.filenames -- it is the only way to recognise the partial later.",
-        "Close the tab. Do not let the run reach its end."
-      ],
-      "expectPage": {
-        "status": "running",
-        "requests": [],
-        "notes": [
-          "The page never reaches a terminal status: the tab is gone. The last status read before closing must be \"running\".",
-          "sessionId is null on this page -- extension-pipe does not surface it."
-        ]
-      },
-      "expectDashboard": [
-        "Within seconds of the tab closing: the session row reads \"Connection lost — may resume\".",
-        "About 10 minutes later: \"Stopped — being recovered\".",
-        "Within about 15 minutes: the row is gone and a queue panel appears with the partial listed as \"Retrying\"."
-      ],
-      "expectStorage": {
-        "files": 1,
-        "naming": "<submitted filename without its extension>-<8 hex characters>.partial.json. The hash suffix is ALWAYS there -- partialFilenameFor derives it from the session id, not from a name collision.",
-        "completeness": "partial: only the trials staged before the tab closed",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
-      },
-      "timing": {
-        "pageRun": "~20 s, then closed",
-        "checkDashboardAfter": "immediately, at ~11 min, and at ~16 min",
-        "checkStorageAfter": "65-75 minutes after the tab was closed"
-      },
-      "deferredCheck": true,
-      "deferredNote": "Re-open the experiment's Drive folder 75 minutes after the tab was closed and look for one *.partial.json whose name starts with this run's filename stem. If the queue panel still shows it as \"Retrying\" before then, that is the 1-hour first-attempt delay, not a failure.",
-      "automation": "agent"
-    },
-    {
-      "id": "brief-dropout",
-      "title": "Brief dropout",
-      "description": "Go offline for about 30 seconds mid-run, then back online, and finish. The dashboard row flips to `Connection lost — may resume` and back to `In progress`; you get one complete file and no partial.",
-      "page": "jspsych",
-      "params": { "trials": "200", "format": "csv", "auto": "1", "stream": "1" },
-      "driverActions": [
-        "Open the URL and let it run for ~10 seconds.",
-        "Put the browser offline (DevTools network throttling, or the OS network toggle) for 30 seconds.",
-        "Go back online and let the run finish."
-      ],
-      "expectPage": {
-        "status": "finished",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
-        "notes": ["an `extension-pipe:` note about a failed flush during the offline window is expected, not a failure"]
-      },
-      "expectDashboard": [
-        "During the offline window: \"Connection lost — may resume\".",
-        "After reconnecting: back to \"In progress\" (the reconnect slot heals the disconnect stamp).",
-        "After finishing: no in-progress row, no queue panel."
-      ],
-      "expectStorage": {
-        "files": 1,
-        "naming": "the single name in __testbed.filenames",
-        "completeness": "complete, with every trial including those recorded while offline",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
-      },
-      "timing": {
-        "pageRun": "~90 s including the offline window",
-        "checkDashboardAfter": "during the offline window and again after reconnecting",
-        "checkStorageAfter": "~30 s after the page reports finished",
-        "note": "The offline window must be under 10 minutes or the sweep will treat the session as abandoned."
-      },
-      "automation": "agent"
-    },
-    {
-      "id": "failed-final-submission",
-      "title": "Failed final submission",
-      "description": "The page claims the filename first, so DataPipe refuses the real submission as a duplicate. The log shows the save failed, and the staged trials come back later as a `.partial.json` under a hash-suffixed name.",
-      "page": "jspsych",
-      "params": { "trials": "20", "format": "csv", "auto": "1", "stream": "1", "breaksave": "1" },
-      "driverActions": [],
-      "expectPage": {
-        "status": "failed",
-        "requests": [
-          { "label": "preclaim", "status": 201, "ok": true },
-          { "label": "final-save", "status": 400, "ok": false, "error": "FILE_EXISTS" }
-        ]
-      },
-      "expectDashboard": [
-        "An error panel naming FILE_EXISTS (\"A file with this name already exists in the storage provider...\").",
-        "Within about 15 minutes: a queue panel with the recovered partial as \"Retrying\"."
-      ],
-      "expectStorage": {
-        "files": 2,
-        "naming": "the pre-claim file under the run's own filename, plus <stem>-<8 hex>.partial.json holding the staged trials",
-        "completeness": "the pre-claim file holds a placeholder line, not data; the partial holds the real trials",
-        "location": "experiment folder root (data/raw/ if metadata is on)",
-        "note": "api-data.ts deliberately does NOT discard staging on a duplicate-filename refusal -- that is what makes the partial recoverable."
-      },
-      "timing": {
-        "pageRun": "~20 s",
-        "checkDashboardAfter": "immediately, and again at ~16 min",
-        "checkStorageAfter": "the pre-claim file immediately; the partial 65-75 minutes after the run"
-      },
-      "deferredCheck": true,
-      "deferredNote": "Re-check the folder ~75 minutes later for the .partial.json. The pre-claim file is there straight away and is not the thing under test.",
-      "automation": "full"
-    },
-    {
-      "id": "ended-early",
-      "title": "Ended early",
-      "description": "Set `abort` below the trial count and the experiment stops as a failed attention check would. The data is still submitted — the behaviour a save trial never had, because an aborted timeline never reaches one.",
-      "page": "jspsych",
-      "params": { "trials": "20", "abort": "5", "format": "csv", "auto": "1", "stream": "1" },
-      "driverActions": [],
-      "expectPage": {
-        "status": "finished",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
-        "notes": ["a note reading \"timeline ended early at trial 5 of 20\""]
-      },
-      "expectDashboard": ["No in-progress row after the run; no error panel; no queue panel."],
-      "expectStorage": {
-        "files": 1,
-        "naming": "the single name in __testbed.filenames",
-        "completeness": "complete for what ran: 5 trial rows, not 20",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
-      },
-      "timing": {
-        "pageRun": "~10 s",
-        "checkDashboardAfter": "after the run",
-        "checkStorageAfter": "~30 s after the page reports finished"
-      },
-      "automation": "full"
+      "automation": "full",
+      "observed": "2026-09-19 with trials=40: final save 201, file in data/raw/, in-progress row behaved as described. PASS."
     },
     {
       "id": "baseline-no-streaming",
+      "order": 2,
       "title": "Baseline without streaming",
       "description": "With save-as-you-go off there is one submission at the end, as before incremental upload existed. One file, and no in-progress row at any point.",
       "page": "jspsych",
@@ -201,30 +105,63 @@
         "requests": [{ "label": "final-save", "status": 201, "ok": true }]
       },
       "expectDashboard": [
-        "No \"Sessions in progress\" panel at any point -- nothing calls /api/session.",
-        "No queue panel."
+        "No row for this run in \"Sessions in progress\" at any point -- nothing calls /api/session.",
+        "No queue entry."
       ],
       "expectStorage": {
         "files": 1,
-        "naming": "the single name in __testbed.filenames, ending .json",
+        "countBy": "files matching this run's filename stem",
+        "naming": "the name in the result's filenames, ending .json",
         "completeness": "complete",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
+        "location": "experiment folder root, or data/raw/ with metadata on"
       },
       "timing": {
-        "pageRun": "~20 s",
+        "pageRun": "~30 s",
         "checkDashboardAfter": "during and after the run",
         "checkStorageAfter": "~30 s after the page reports finished"
       },
-      "automation": "full"
+      "automation": "full",
+      "observed": "2026-09-19 with trials=10 (csv): final save 201, no in-progress row, file in data/raw/. PASS."
+    },
+    {
+      "id": "ended-early",
+      "order": 3,
+      "title": "Ended early",
+      "description": "Set `abort` below the trial count and the experiment stops as a failed attention check would. The data is still submitted — the behaviour a save trial never had, because an aborted timeline never reaches one.",
+      "page": "jspsych",
+      "params": { "trials": "20", "abort": "5", "format": "csv", "auto": "1", "stream": "1" },
+      "driverActions": [],
+      "expectPage": {
+        "status": "finished",
+        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
+        "notes": ["a note reading \"timeline ended early at trial 5 of 20\""]
+      },
+      "expectDashboard": ["No row for this run afterwards; no new error-panel entry; no queue entry."],
+      "expectStorage": {
+        "files": 1,
+        "countBy": "files matching this run's filename stem",
+        "naming": "the name in the result's filenames",
+        "completeness": "complete for what ran: 5 trial rows, not 20",
+        "location": "experiment folder root, or data/raw/ with metadata on"
+      },
+      "timing": {
+        "pageRun": "~15 s",
+        "checkDashboardAfter": "after the run",
+        "checkStorageAfter": "~30 s after the page reports finished"
+      },
+      "automation": "full",
+      "observed": "not run on 2026-09-19."
     },
     {
       "id": "vanilla-streaming",
+      "order": 4,
       "title": "Plain JavaScript, streaming",
       "description": "The same recovery behaviour with no framework at all — an in-progress row while it runs, one file at the end. This was impossible until the staging client moved out of the jsPsych plugin.",
       "page": "vanilla",
       "params": { "trials": "20", "format": "csv", "auto": "1", "stream": "1", "compress": "1" },
       "driverActions": [
-        "Open the URL, then press any key once (or dispatch a keydown) -- the page waits for a keypress before the trials start."
+        "Validation must be off, or `trial_type` removed from the required fields -- see preconditions. Otherwise this is refused with 400 INVALID_DATA.",
+        "Open the URL, click the page body, then send a single `f` keypress in a SEPARATE call. Assert the first trial appeared before waiting."
       ],
       "expectPage": {
         "status": "finished",
@@ -232,29 +169,32 @@
         "requests": [{ "label": "final-save", "status": 201, "ok": true }]
       },
       "expectDashboard": [
-        "While running: one row reading \"In progress\".",
-        "After finishing: the panel is gone."
+        "While running: a row for this run reading \"In progress\".",
+        "After finishing: that row is gone."
       ],
       "expectStorage": {
         "files": 1,
-        "naming": "the single name in __testbed.filenames",
+        "countBy": "files matching this run's filename stem",
+        "naming": "the name in the result's filenames",
         "completeness": "complete",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
+        "location": "experiment folder root, or data/raw/ with metadata on"
       },
       "timing": {
-        "pageRun": "~20 s after the first keypress",
+        "pageRun": "~8 s after the first keypress (observed 400 ms per trial)",
         "checkDashboardAfter": "during and after the run",
         "checkStorageAfter": "~30 s after the page reports finished"
       },
-      "automation": "full"
+      "automation": "full",
+      "observed": "2026-09-19 with trials=8 and condition=1: gzipped POST /api/data returned 201, file in data/raw/. PASS, after the `trial_type` required field was removed."
     },
     {
       "id": "vanilla-uncompressed",
+      "order": 5,
       "title": "Plain JavaScript, uncompressed body",
       "description": "The same run with gzip off, so the submission goes through the hosting layer as a plain JSON body. Worth running alongside the compressed one because gzip and the hosting rewrite are the two things in front of `/api/data` that can each break on their own.",
       "page": "vanilla",
       "params": { "trials": "20", "format": "csv", "auto": "1", "stream": "1", "compress": "0" },
-      "driverActions": ["Open the URL and press any key once to start the trials."],
+      "driverActions": ["Open the URL, click the body, then send `f` in a separate call."],
       "expectPage": {
         "status": "finished",
         "requests": [{ "label": "final-save", "status": 201, "ok": true }]
@@ -262,80 +202,28 @@
       "expectDashboard": ["Identical to vanilla-streaming."],
       "expectStorage": {
         "files": 1,
-        "naming": "the single name in __testbed.filenames",
-        "completeness": "complete, byte-for-byte the same shape as the gzipped run",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
+        "countBy": "files matching this run's filename stem",
+        "naming": "the name in the result's filenames",
+        "completeness": "complete, the same shape as the gzipped run",
+        "location": "experiment folder root, or data/raw/ with metadata on"
       },
       "timing": {
-        "pageRun": "~20 s after the first keypress",
+        "pageRun": "~8 s after the first keypress",
         "checkDashboardAfter": "after the run",
         "checkStorageAfter": "~30 s after the page reports finished"
       },
-      "automation": "full"
-    },
-    {
-      "id": "vanilla-condition",
-      "title": "Plain JavaScript, conditions",
-      "description": "With `Request a condition` ticked, the log shows the assigned number and the run proceeds normally.",
-      "page": "vanilla",
-      "params": { "trials": "10", "format": "csv", "auto": "1", "stream": "1", "condition": "1" },
-      "driverActions": [
-        "Switch \"Assign conditions in sequence\" ON in the experiment's \"Data collection\" panel and set \"How many conditions?\" to 2 before running.",
-        "Open the URL and press any key once to start."
-      ],
-      "expectPage": {
-        "status": "finished",
-        "condition": "an integer in 0..n-1; running twice in a row must give 0 then 1, since assignment is sequential",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
-        "notes": ["a note saying the /api/condition request was made inside datapipe-client"]
-      },
-      "expectDashboard": ["Nothing specific; the condition counter is not surfaced in the UI."],
-      "expectStorage": {
-        "files": 1,
-        "naming": "the single name in __testbed.filenames",
-        "completeness": "complete",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
-      },
-      "timing": {
-        "pageRun": "~10 s after the first keypress",
-        "checkDashboardAfter": "n/a",
-        "checkStorageAfter": "~30 s after the page reports finished"
-      },
-      "automation": "agent"
-    },
-    {
-      "id": "vanilla-condition-off",
-      "title": "Plain JavaScript, condition assignment switched off",
-      "description": "Switch condition assignment off on the dashboard and run again: the page reports that `getCondition` threw and refuses to start, rather than running an unassigned participant.",
-      "page": "vanilla",
-      "params": { "trials": "10", "format": "csv", "auto": "1", "stream": "1", "condition": "1" },
-      "driverActions": [
-        "Switch \"Assign conditions in sequence\" OFF in the experiment's \"Data collection\" panel.",
-        "Open the URL. No keypress is needed -- the page stops before it asks for one."
-      ],
-      "expectPage": {
-        "status": "aborted",
-        "requests": [],
-        "notes": ["a note beginning \"getCondition threw\""],
-        "serverSide": "POST /api/condition answers 400 with error CONDITION_ASSIGNMENT_NOT_ACTIVE. The page cannot see the status directly, because datapipe-client throws rather than returning it -- confirm the code with the direct probe in the skill's endpoint table if it matters."
-      },
-      "expectDashboard": ["An error panel entry for CONDITION_ASSIGNMENT_NOT_ACTIVE."],
-      "expectStorage": { "files": 0, "naming": "n/a", "completeness": "nothing is written", "location": "n/a" },
-      "timing": {
-        "pageRun": "~2 s",
-        "checkDashboardAfter": "after the run",
-        "checkStorageAfter": "n/a"
-      },
-      "automation": "agent"
+      "automation": "full",
+      "observed": "not run on 2026-09-19; only the gzipped path was exercised."
     },
     {
       "id": "duplicate-rejection",
+      "order": 6,
       "title": "Duplicate rejection",
       "description": "On the plain JavaScript page, sending the same file a second time is refused.",
       "page": "vanilla",
       "params": { "trials": "5", "format": "csv", "auto": "1", "stream": "0", "resubmit": "1" },
       "driverActions": [
-        "Open the URL and press any key once. `resubmit=1` makes the page press \"Send the same file again\" itself; without it, click that button by hand."
+        "Open the URL, click the body, then send `f` in a separate call. `resubmit=1` presses \"Send the same file again\" itself; without it, click that button by hand."
       ],
       "expectPage": {
         "status": "finished",
@@ -344,57 +232,178 @@
           { "label": "resubmit", "status": 400, "ok": false, "error": "FILE_EXISTS" }
         ]
       },
-      "expectDashboard": ["An error panel entry for FILE_EXISTS."],
+      "expectDashboard": ["A new error-panel entry with the code FILE_EXISTS. Assert on the code, not the message."],
       "expectStorage": {
         "files": 1,
-        "naming": "the single name in __testbed.filenames -- the second request must not add a second copy or overwrite the first",
+        "countBy": "files matching this run's filename stem -- the second request must not add a copy or overwrite the first",
+        "naming": "the name in the result's filenames",
         "completeness": "complete",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
+        "location": "experiment folder root, or data/raw/ with metadata on"
       },
       "timing": {
-        "pageRun": "~10 s after the first keypress",
+        "pageRun": "~5 s after the first keypress",
         "checkDashboardAfter": "after the run",
         "checkStorageAfter": "~30 s after the page reports finished"
       },
-      "automation": "full"
+      "automation": "full",
+      "observed": "2026-09-19 via the button (the published page predated `resubmit`): 400 FILE_EXISTS. PASS."
     },
     {
-      "id": "closed-experiment",
-      "title": "Closed experiment",
-      "description": "Switch data collection off and run the jsPsych test: no session is started and the final submission is refused with `DATA_COLLECTION_NOT_ACTIVE`.",
+      "id": "abandoned-tab",
+      "order": 7,
+      "title": "Abandoned tab",
+      "description": "Close the tab half-way. Within seconds the dashboard row reads `Connection lost — may resume`; after 10 minutes, `Stopped — being recovered`; the sweep then queues the staged trials, and the `.partial.json` reaches storage about an hour later, not within 15 minutes.",
       "page": "jspsych",
-      "params": { "trials": "5", "format": "csv", "auto": "1", "stream": "1" },
+      "params": { "trials": "60", "format": "csv", "auto": "1", "stream": "1" },
       "driverActions": [
-        "Switch \"Accept new data\" OFF in the experiment's \"Data collection\" panel and confirm the \"Saved\" flag appears.",
-        "Open the URL and let it run.",
-        "Switch \"Accept new data\" back ON afterwards if more scenarios follow."
+        "Open the URL and let it run to about trial 50 of 60 (roughly 60-80 s).",
+        "Read the result and KEEP the first filename FIRST -- it is unrecoverable once the tab is gone, and it is the only way to recognise the partial later.",
+        "Close the tab. Note the wall-clock time: the recovery clock starts at the socket drop. An open tab counts as live."
+      ],
+      "expectPage": {
+        "status": "running",
+        "requests": [],
+        "notes": [
+          "The page never reaches a terminal status: the tab is gone. The last status read before closing must be \"running\".",
+          "sessionId is null on this page -- extension-pipe does not surface it."
+        ]
+      },
+      "expectDashboard": [
+        "Within seconds of the tab closing: the row for this run reads \"Connection lost — may resume\".",
+        "About 10-12 minutes later: \"Stopped — being recovered\".",
+        "Then the row disappears and a queue entry appears with failureReason \"Recovered from an abandoned session (N trials)\", status pending, retryCount 0, lastAttemptAt null, nextRetryAt one hour out."
+      ],
+      "expectStorage": {
+        "files": 1,
+        "countBy": "files matching `<this run's filename stem>-<8 hex>.partial.json`",
+        "naming": "<submitted filename without its extension>-<8 hex characters>.partial.json. The hash suffix is ALWAYS there -- partialFilenameFor derives it from the session id, not from a name collision.",
+        "completeness": "partial: only the trials staged before the tab closed",
+        "location": "experiment folder root, or data/raw/ with metadata on"
+      },
+      "timing": {
+        "pageRun": "~60-80 s, then closed",
+        "checkDashboardAfter": "immediately, at ~11 min, and at ~14 min",
+        "checkStorageAfter": "65-75 minutes after the tab was closed"
+      },
+      "deferredCheck": true,
+      "deferredNote": "Re-open the folder 75 minutes after the tab was closed and look for one *.partial.json matching this run's filename stem. Until then `GET /api/queuestatus?experimentID=<id>` is better evidence than the dashboard panel: it shows retryCount and lastAttemptAt. A queue entry that has never been attempted is the expected state, not a failure.",
+      "automation": "agent",
+      "observed": "2026-09-19 with trials=60, closed at ~50: queued 12 min after the tab closed as `data/raw/testbed-...-6b33aa40.partial.json`, nextRetryAt exactly +60 min, live row transitions as described. PASS up to the queue; the Drive write itself was not waited for."
+    },
+    {
+      "id": "failed-final-submission",
+      "order": 8,
+      "title": "Failed final submission",
+      "description": "The page claims the filename first, so DataPipe refuses the real submission as a duplicate. The log shows the save failed, and the staged trials come back later as a `.partial.json` under a hash-suffixed name.",
+      "page": "jspsych",
+      "params": { "trials": "20", "format": "csv", "auto": "1", "stream": "1", "breaksave": "1" },
+      "driverActions": [
+        "Open the URL. If the pre-claim is refused the page now stops with status \"failed\" and a note instead of running -- that is a FAIL of the scenario, and the note says which code came back.",
+        "After the final save is refused, CLOSE THE TAB promptly. datapipe-client stamps the session abandoned at the refusal, but whether extension-pipe does the same is unverified; closing removes the doubt.",
+        "Note the wall-clock time of the refusal."
       ],
       "expectPage": {
         "status": "failed",
-        "requests": [{ "label": "final-save", "status": 400, "ok": false, "error": "DATA_COLLECTION_NOT_ACTIVE" }],
-        "notes": ["an `extension-pipe:` note that the session was refused; the page cannot see /api/session's status code itself"]
+        "requests": [
+          { "label": "preclaim", "status": 201, "ok": true },
+          { "label": "final-save", "status": 400, "ok": false, "error": "FILE_EXISTS" }
+        ]
       },
       "expectDashboard": [
-        "No in-progress row at any point.",
-        "An error panel entry for DATA_COLLECTION_NOT_ACTIVE (logged twice: once by /api/session, once by /api/data)."
+        "A new error-panel entry with the code FILE_EXISTS.",
+        "Within about 15 minutes of the refusal: a queue entry for `<stem>-<8 hex>.partial.json`."
       ],
-      "expectStorage": { "files": 0, "naming": "n/a", "completeness": "nothing is written", "location": "n/a" },
+      "expectStorage": {
+        "files": 2,
+        "countBy": "files matching this run's filename stem: the pre-claim file, and later the -<8 hex>.partial.json",
+        "naming": "the pre-claim file under the run's own filename, plus <stem>-<8 hex>.partial.json holding the staged trials",
+        "completeness": "the pre-claim file holds one placeholder row, not data; the partial holds the real trials",
+        "location": "experiment folder root, or data/raw/ with metadata on",
+        "note": "api-data.ts deliberately does NOT discard staging on a duplicate-filename refusal -- that is what makes the partial recoverable. It DOES discard if the experiment is switched off before the sweep gets there; see `ordering`."
+      },
       "timing": {
-        "pageRun": "~10 s",
+        "pageRun": "~30 s",
+        "checkDashboardAfter": "immediately, and again ~15 min after the refusal",
+        "checkStorageAfter": "the pre-claim file immediately; the partial 65-75 minutes after the refusal"
+      },
+      "deferredCheck": true,
+      "deferredNote": "Re-check the folder ~75 minutes after the refusal for the .partial.json. The pre-claim file is there straight away and is not the thing under test. Do NOT switch data collection off before this session's partial is visible in /api/queuestatus.",
+      "automation": "full",
+      "observed": "2026-09-19: the testbed's own breaksave was BROKEN -- the pre-claim body was a plain sentence, refused with METADATA_ERROR on a Psych-DS experiment, so the filename was never claimed and the run silently succeeded. Reproduced by hand with a valid one-row CSV pre-claim: 201, then final save 400 FILE_EXISTS, so the refusal half PASSES. The recovery half was invalidated by switching the experiment off too early; see `ordering`. The pre-claim body is fixed in this change and the page now stops loudly if the claim fails."
+    },
+    {
+      "id": "vanilla-condition",
+      "order": 9,
+      "title": "Plain JavaScript, conditions",
+      "description": "With `Request a condition` ticked, the log shows the assigned number and the run proceeds normally.",
+      "page": "vanilla",
+      "params": { "trials": "10", "format": "csv", "auto": "1", "stream": "1", "condition": "1" },
+      "driverActions": [
+        "Switch \"Assign conditions in sequence\" ON and set \"How many conditions?\" to 2. Click the visible switch track, not the hidden checkbox, and wait for the \"Saved\" badge.",
+        "Open the URL, click the body, then send `f` in a separate call.",
+        "Run it twice to see the sequence advance."
+      ],
+      "expectPage": {
+        "status": "finished",
+        "condition": "an integer in 0..n-1; two runs in a row give 0 then 1, since assignment is sequential and wraps",
+        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
+        "notes": ["a note saying the /api/condition request was made inside datapipe-client"]
+      },
+      "expectDashboard": ["Nothing specific; the condition counter is not surfaced in the UI."],
+      "expectStorage": {
+        "files": 1,
+        "countBy": "files matching this run's filename stem",
+        "naming": "the name in the result's filenames",
+        "completeness": "complete",
+        "location": "experiment folder root, or data/raw/ with metadata on"
+      },
+      "timing": {
+        "pageRun": "~5 s after the first keypress",
+        "checkDashboardAfter": "n/a",
+        "checkStorageAfter": "~30 s after the page reports finished"
+      },
+      "mutatesExperimentState": "turns \"Assign conditions in sequence\" ON",
+      "automation": "agent",
+      "observed": "2026-09-19: two runs gave condition 0 then 1, a third (direct /api/condition) gave 0 -- round-robin over 2 conditions, as documented. PASS."
+    },
+    {
+      "id": "vanilla-condition-off",
+      "order": 10,
+      "title": "Plain JavaScript, condition assignment switched off",
+      "description": "Switch condition assignment off on the dashboard and run again: the page reports that `getCondition` threw and refuses to start, rather than running an unassigned participant.",
+      "page": "vanilla",
+      "params": { "trials": "10", "format": "csv", "auto": "1", "stream": "1", "condition": "1" },
+      "driverActions": [
+        "Switch \"Assign conditions in sequence\" OFF and wait for the \"Saved\" badge.",
+        "Open the URL. No keypress is needed -- the page stops before it asks for one."
+      ],
+      "expectPage": {
+        "status": "aborted",
+        "requests": [],
+        "notes": ["a note beginning \"getCondition threw\""],
+        "serverSide": "POST /api/condition answers 400 with error CONDITION_ASSIGNMENT_NOT_ACTIVE. The page cannot see the status directly, because datapipe-client throws rather than returning it -- confirm the code with the direct probe in the skill's endpoint table if it matters."
+      },
+      "expectDashboard": ["A new error-panel entry with the code CONDITION_ASSIGNMENT_NOT_ACTIVE."],
+      "expectStorage": { "files": 0, "countBy": "n/a", "naming": "n/a", "completeness": "nothing is written", "location": "n/a" },
+      "timing": {
+        "pageRun": "~2 s",
         "checkDashboardAfter": "after the run",
         "checkStorageAfter": "n/a"
       },
-      "automation": "agent"
+      "mutatesExperimentState": "turns \"Assign conditions in sequence\" OFF",
+      "automation": "agent",
+      "observed": "not run on 2026-09-19."
     },
     {
       "id": "base64-valid",
+      "order": 11,
       "title": "Base64 upload",
       "description": "The plain JavaScript page sends a small valid base64 payload to `/api/base64`, which now runs inside the same consolidated function as `/api/data`. The decoded file lands alongside the run's data file.",
       "page": "vanilla",
       "params": { "trials": "3", "format": "csv", "auto": "1", "stream": "0", "base64": "1" },
       "driverActions": [
-        "Switch \"Accept base64 file uploads\" ON in the experiment's \"Data collection\" panel first. Without it the endpoint answers 400 BASE64DATA_COLLECTION_NOT_ACTIVE before it ever looks at the payload.",
-        "Open the URL and press any key once."
+        "Switch \"Accept base64 file uploads\" ON first. Without it the endpoint answers 400 BASE64DATA_COLLECTION_NOT_ACTIVE before it ever looks at the payload.",
+        "Open the URL, click the body, then send `f` in a separate call."
       ],
       "expectPage": {
         "status": "finished",
@@ -403,29 +412,33 @@
           { "label": "base64", "status": 201, "ok": true }
         ]
       },
-      "expectDashboard": ["No error panel entry."],
+      "expectDashboard": ["No new error-panel entry."],
       "expectStorage": {
         "files": 2,
+        "countBy": "files matching this run's filename stem",
         "naming": "the data file, plus <stem>.b64.txt holding the decoded text \"testbed base64 payload\"",
         "completeness": "complete",
-        "location": "the data file follows the metadata layout; the base64 file always goes to the folder root"
+        "location": "the data file follows the metadata layout; the base64 file ALWAYS goes to the folder root -- /api/base64 does not apply the Psych-DS layout, and it runs no metadata block, so it is unaffected by METADATA_ERROR"
       },
       "timing": {
-        "pageRun": "~5 s after the first keypress",
+        "pageRun": "~3 s after the first keypress",
         "checkDashboardAfter": "after the run",
         "checkStorageAfter": "~30 s after the page reports finished"
       },
-      "automation": "agent"
+      "mutatesExperimentState": "turns \"Accept base64 file uploads\" ON",
+      "automation": "agent",
+      "observed": "2026-09-19 by direct probe rather than through the page (the published page predated `base64`): a 1x1 PNG returned 201 and landed at the folder root at 70 bytes. PASS for the endpoint; the page path is unexercised."
     },
     {
       "id": "base64-invalid",
+      "order": 12,
       "title": "Base64 upload, invalid payload",
       "description": "The same path with something that is not base64 at all. The endpoint refuses it with `INVALID_BASE64_DATA` and the run's own data file is unaffected.",
       "page": "vanilla",
       "params": { "trials": "3", "format": "csv", "auto": "1", "stream": "0", "base64": "invalid" },
       "driverActions": [
         "\"Accept base64 file uploads\" must still be ON: the active check runs BEFORE the validity check, so with it off this scenario returns the wrong code and proves nothing.",
-        "Open the URL and press any key once."
+        "Open the URL, click the body, then send `f` in a separate call."
       ],
       "expectPage": {
         "status": "finished",
@@ -434,19 +447,95 @@
           { "label": "base64", "status": 400, "ok": false, "error": "INVALID_BASE64_DATA" }
         ]
       },
-      "expectDashboard": ["An error panel entry for INVALID_BASE64_DATA."],
+      "expectDashboard": ["A new error-panel entry with the code INVALID_BASE64_DATA."],
       "expectStorage": {
         "files": 1,
-        "naming": "the data file only; no .b64.txt",
+        "countBy": "files matching this run's filename stem -- the data file only, no .b64.txt",
+        "naming": "the data file only",
         "completeness": "complete",
-        "location": "experiment folder root (data/raw/ if metadata is on)"
+        "location": "experiment folder root, or data/raw/ with metadata on"
       },
       "timing": {
-        "pageRun": "~5 s after the first keypress",
+        "pageRun": "~3 s after the first keypress",
         "checkDashboardAfter": "after the run",
         "checkStorageAfter": "~30 s after the page reports finished"
       },
-      "automation": "agent"
+      "automation": "agent",
+      "observed": "2026-09-19 by direct probe: 400 INVALID_BASE64_DATA, refused in 300 ms before any provider write. PASS for the endpoint; the page path is unexercised."
+    },
+    {
+      "id": "brief-dropout",
+      "order": 13,
+      "title": "Brief dropout",
+      "description": "Go offline for about 30 seconds mid-run, then back online, and finish. The dashboard row flips to `Connection lost — may resume` and back to `In progress`; you get one complete file and no partial.",
+      "page": "jspsych",
+      "params": { "trials": "200", "format": "csv", "auto": "1", "stream": "1" },
+      "driverActions": [
+        "Open the URL and let it run for ~10 seconds.",
+        "Put the browser offline for 30 seconds: DevTools network throttling, the OS network toggle, or Playwright's context.setOffline(true).",
+        "Go back online and let the run finish."
+      ],
+      "expectPage": {
+        "status": "finished",
+        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
+        "notes": ["an `extension-pipe:` note about a failed flush during the offline window is expected, not a failure"]
+      },
+      "expectDashboard": [
+        "During the offline window: the row for this run reads \"Connection lost — may resume\".",
+        "After reconnecting: back to \"In progress\" (the reconnect slot heals the disconnect stamp).",
+        "After finishing: no row for this run, and no queue entry."
+      ],
+      "expectStorage": {
+        "files": 1,
+        "countBy": "files matching this run's filename stem -- and confirm there is NO .partial.json for it",
+        "naming": "the name in the result's filenames",
+        "completeness": "complete, including the trials recorded while offline",
+        "location": "experiment folder root, or data/raw/ with metadata on"
+      },
+      "timing": {
+        "pageRun": "~4 min including the offline window",
+        "checkDashboardAfter": "during the offline window and again after reconnecting",
+        "checkStorageAfter": "~30 s after the page reports finished",
+        "note": "The offline window must be under 10 minutes or the sweep will treat the session as abandoned."
+      },
+      "automation": "manual",
+      "automationNote": "The Chrome extension cannot throttle or disable the network, so an agent driving that extension cannot run this. No URL parameter was added to fake it: what is under test is the Realtime Database's own disconnect-and-heal path, and a page-level simulation would exercise neither the onDisconnect stamp nor the reconnect slot that clears it -- it would prove nothing while looking like it had. A Playwright job CAN run it with context.setOffline(true), which makes it the one non-`full` scenario worth putting in a headless job.",
+      "observed": "not run on 2026-09-19: the browser tooling had no way to go offline."
+    },
+    {
+      "id": "closed-experiment",
+      "order": 14,
+      "title": "Closed experiment",
+      "description": "Switch data collection off and run the jsPsych test: no session is started and the final submission is refused with `DATA_COLLECTION_NOT_ACTIVE`.",
+      "page": "jspsych",
+      "params": { "trials": "5", "format": "csv", "auto": "1", "stream": "1" },
+      "driverActions": [
+        "STOP. Confirm first that every recovery-dependent scenario's partial is already QUEUED -- `GET /api/queuestatus?experimentID=<id>` must list an entry for `abandoned-tab` and for `failed-final-submission`. Switching collection off before that DESTROYS them.",
+        "Switch \"Accept new data\" OFF and wait for the \"Saved\" badge.",
+        "Open the URL and let it run.",
+        "Switch \"Accept new data\" back ON afterwards if anything else follows."
+      ],
+      "expectPage": {
+        "status": "failed",
+        "requests": [{ "label": "final-save", "status": 400, "ok": false, "error": "DATA_COLLECTION_NOT_ACTIVE" }],
+        "notes": ["a `datapipe:` note that the session was not started; the page cannot see /api/session's status code itself"]
+      },
+      "expectDashboard": [
+        "No row for this run in \"Sessions in progress\" at any point.",
+        "New error-panel entries with the code DATA_COLLECTION_NOT_ACTIVE (logged twice: once by /api/session, once by /api/data)."
+      ],
+      "expectStorage": { "files": 0, "countBy": "n/a", "naming": "n/a", "completeness": "nothing is written", "location": "n/a" },
+      "timing": {
+        "pageRun": "~10 s",
+        "checkDashboardAfter": "after the run",
+        "checkStorageAfter": "n/a"
+      },
+      "mutatesExperimentState": "turns \"Accept new data\" OFF -- and while it is off the staging sweep DISCARDS any still-staged session",
+      "mustRunLast": true,
+      "runAfter": ["abandoned-tab", "failed-final-submission"],
+      "runAfterCondition": "each of those scenarios' partials is visible as a queue entry in GET /api/queuestatus?experimentID=<id>",
+      "automation": "agent",
+      "observed": "2026-09-19: `datapipe: session not started (HTTP 400)` then final save 400 DATA_COLLECTION_NOT_ACTIVE. PASS -- but running it early is what destroyed the failed-final-submission recovery in that run."
     }
   ]
 }

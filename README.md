@@ -95,6 +95,11 @@ DOM: `document.documentElement.dataset.testbedStatus`, and the full JSON in
 `<pre id="testbed-result">` under *Machine-readable result* at the bottom of
 each page.
 
+**Read it from the DOM, not from the page global.** A browser extension
+evaluating JavaScript does so in an isolated world and may not see
+`window.__testbed` at all, while DOM reads always work. Treat the global as a
+convenience for same-world drivers such as Playwright.
+
 **`requests` holds only the requests the page issues itself.** The extension
 and `datapipe-client` make their own — `POST /api/session`, the jsPsych page's
 final `POST /api/data`, and the staging writes — and the page cannot see them.
@@ -116,15 +121,30 @@ and the provider folder (`expectStorage`), plus `timing` and an `automation`
 level:
 
 - **full** — open the URL and read the result.
-- **agent** — needs a browser-driving agent: closing a tab, toggling the
-  network, or flipping a dashboard switch first.
-- **manual** — a human.
+- **agent** — needs a browser-driving agent: closing a tab or flipping a
+  dashboard switch first.
+- **manual** — a human. Only *Brief dropout*, which needs the network turned
+  off and back on; a browser extension cannot do that, and faking it in the
+  page would exercise neither the disconnect stamp nor the reconnect that
+  clears it.
+
+**Run them in `order`.** It is load-bearing, not decorative. Switching data
+collection off — which *Closed experiment* does — makes the sweep **discard**
+any session still staged, so running it early destroys the recoveries the
+`deferredCheck` scenarios are waiting on. `mustRunLast`, `runAfter` and
+`mutatesExperimentState` say which scenarios constrain which.
 
 Scenarios marked `deferredCheck` cannot finish inside a normal run: a recovered
 partial session is *queued* by the five-minute sweep and its first upload
 attempt is an hour later, so the file appears in storage roughly 65–75 minutes
 after the participant dropped out. `deferredNote` says what to look for and
 when.
+
+`preconditions` and `knownIssues` are worth reading before the first run. Two
+in particular: a new experiment ships with validation on and a required
+`trial_type` field that the plain-JavaScript page does not emit, and on Google
+Drive a `.psychds-ignore` file accumulates per upload — so count files by
+filename stem, never by folder total.
 
 The runbook that drives all of this lives in the DataPipe repo, at
 `.claude/skills/e2e-testbed/SKILL.md`.

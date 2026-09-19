@@ -140,6 +140,24 @@ if (requireExperiment(params)) {
     },
   ];
 
+  /**
+   * A pre-claim payload DataPipe will actually accept.
+   *
+   * It has to survive two gates the old plain-sentence body did not. With
+   * Psych-DS metadata on, the raw submission is parsed to derive the dataset's
+   * tables, and anything that is not CSV or JSON is refused with
+   * METADATA_ERROR. With validation on -- which is the DEFAULT for a new
+   * experiment (`requiredFields: ["trial_type"]` in create-experiment.ts) --
+   * a row without a `trial_type` column is refused with INVALID_DATA. This is
+   * the smallest body that passes both, and it deliberately mirrors the shape
+   * of what the run itself submits.
+   */
+  function preclaimBody(format) {
+    const row = { trial_type: "html-keyboard-response", trial_index: 0, rt: 100 };
+    if (format === "json") return JSON.stringify([row]);
+    return `${Object.keys(row).join(",")}\n${Object.values(row).join(",")}\n`;
+  }
+
   async function run() {
     log(`filename ${filename}`);
     log(
@@ -164,10 +182,11 @@ if (requireExperiment(params)) {
         body: JSON.stringify({
           experimentID: params.experiment,
           filename,
-          data: "claimed by the testbed to force a duplicate-filename refusal\n",
+          data: preclaimBody(params.format),
         }),
       });
-      log(`  pre-claim responded ${response.status}`);
+      const body = await response.json().catch(() => null);
+      log(`  pre-claim responded ${response.status}`, body ?? undefined);
       // The page's own request, so it is timed and recorded in full -- unlike
       // the extension's save below.
       recordRequest({
@@ -175,7 +194,25 @@ if (requireExperiment(params)) {
         url,
         status: response.status,
         ms: Math.round(performance.now() - startedAt),
+        error: response.ok ? undefined : (body?.error ?? body),
       });
+
+      // STOP if the claim did not land. Observed against datapipe-test on
+      // 2026-09-19: the old pre-claim body was a plain sentence, which a
+      // Psych-DS experiment refuses with METADATA_ERROR before the name is
+      // ever taken. The run then went on to SUCCEED, and the scenario
+      // reported a pass while testing nothing it claimed to test. A run whose
+      // pre-claim failed is meaningless, so it ends here and says so.
+      if (!response.ok) {
+        const detail = body?.error ?? response.status;
+        log(`  breaksave ABORTED: the filename was not claimed (${detail})`);
+        document.getElementById("target").innerHTML =
+          `<p class="notice">breaksave could not claim the filename (${detail}), so the ` +
+          "final save would not be refused. The run was not started. See the log.</p>";
+        noteResult(`breaksave pre-claim failed (${detail}); the timeline was not run`);
+        setResultStatus("failed");
+        return;
+      }
     }
 
     jsPsych.run(timeline);
