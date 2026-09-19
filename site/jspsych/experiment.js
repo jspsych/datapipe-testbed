@@ -16,9 +16,12 @@ import {
   makeFilename,
   startResult,
   setResultStatus,
+  markRunning,
+  setTrialsCompleted,
   recordRequest,
   noteResult,
   addFilename,
+  endpointURL,
 } from "../common.js";
 
 const params = readParams();
@@ -44,6 +47,24 @@ noteResult(
     "and any degraded path it reports arrives as an `extension-pipe:` note."
 );
 
+// Said once, because "sessionId: null" on a page that plainly DID stream reads
+// like a bug until you know why. @jspsych/extension-pipe 0.2.0 keeps its
+// DataPipeSession in a field its source declares `private` (src/index.ts,
+// `private session: DataPipeSession | null`) and exposes nothing else: no
+// getter, no event, and an on_save result of {ok, status, body} with no id in
+// it. TypeScript's `private` is erased at runtime, so
+// `jsPsych.extensions.pipe.session.sessionId` would in fact answer today -- and
+// it is not this page's to read. A testbed that asserts on a library's private
+// field stops testing the library's contract and starts testing its internals,
+// and would break on a patch release without a semver signal. So the field
+// stays null here, and the smallest upstream fix is a three-line public getter
+// on the extension.
+noteResult(
+  "sessionId is null on this page BY DESIGN: extension-pipe 0.2.0 exposes no " +
+    "public way to read the session id it opened. The plain-JavaScript page, " +
+    "which calls datapipe-client itself, does report one."
+);
+
 if (requireExperiment(params)) {
   const jsPsych = initJsPsych({
     display_element: "target",
@@ -64,7 +85,11 @@ if (requireExperiment(params)) {
             saved = true;
             recordRequest({
               label: "final-save",
+              // With the trailing slash, because that is the URL the extension
+              // actually used: datapipe-client's endpoint() adds it. Recording
+              // the slashless form here would be tidier and untrue.
               url: `${params.base}/api/data/`,
+              source: "library",
               status: result.status,
               ok: result.ok,
               // Not timed: the extension started this request, not the page.
@@ -121,13 +146,26 @@ if (requireExperiment(params)) {
           choices: ["f", "j"],
           trial_duration: params.auto ? 400 : null,
           data: { task: "testbed-letter" },
+          // The participant's own start. The instruction trial before this one
+          // waits for a keypress however `auto` is set, so the first time a
+          // letter is on screen is the first moment "trials are advancing" is
+          // true -- which is what a driver is waiting to see before it stops
+          // resending the start key.
+          on_start: () => markRunning(),
           on_finish: () => {
+            // Counted from the data rather than a local variable so that it
+            // stays right whatever the timeline does around it -- and filtered
+            // to `testbed-letter`, so the instruction trial is not counted.
+            // trialsCompleted has to reach `trials` exactly on a clean finish,
+            // and the stored CSV holds one more row than that.
+            const n = jsPsych.data.get().filter({ task: "testbed-letter" }).count();
+            setTrialsCompleted(n);
+
             // ?abort=N ends the experiment at trial N, the way a failed
             // attention check would. The extension still submits, because
             // abortExperiment() unwinds the timeline and falls through to
             // on_finish -- a save TRIAL would never have been reached, which
             // is the behaviour difference this scenario exists to show.
-            const n = jsPsych.data.get().filter({ task: "testbed-letter" }).count();
             if (params.abort && n >= params.abort) {
               log(`aborting at trial ${n} -- the extension should still submit`);
               noteResult(`timeline ended early at trial ${n} of ${params.trials}`);
@@ -174,7 +212,7 @@ if (requireExperiment(params)) {
       // refusal, so the staged trials should come back as a hash-suffixed
       // .partial.json rather than being discarded with the rejected request.
       log("breaksave: claiming the filename first, so the final save is refused");
-      const url = `${params.base}/api/data/`;
+      const url = endpointURL(params.base, "data");
       const startedAt = performance.now();
       const response = await fetch(url, {
         method: "POST",

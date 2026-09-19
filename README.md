@@ -93,47 +93,128 @@ Every run maintains `window.__testbed`:
 
 ```js
 {
-  schema: 1,
+  schema: 2,
   page: "jspsych" | "vanilla",
   params: { ... },            // the resolved settings, including run
-  status: "running" | "finished" | "failed" | "aborted",
+  status: "ready" | "running" | "finished" | "failed" | "aborted",
   startedAt, finishedAt,      // ISO strings
-  sessionId, condition,       // null when the run did not use them
+  trialsCompleted, trialsPlanned,
+  sessionId, condition,       // null when the run did not report them
   filenames: [ ... ],         // every name this run asked storage to hold
-  requests: [ { label, method, url, status, ok, ms, error? } ],
+  requests: [ { label, method, url, status, ok, ms, source, error? } ],
   notes: [ ... ]
 }
 ```
 
-`status` means:
+#### Status
 
-- **running** — still going. A tab closed mid-run never leaves this, which is
-  what the abandoned-session scenarios look for.
+```
+ready ──▶ running ──▶ finished | failed
+  └───────────────▶ aborted
+```
+
+- **ready** — the page has loaded, its settings are valid, and it is waiting
+  for the participant's first keypress. Both pages sit here on *Press any key
+  to start*.
+- **running** — the first trial has started. Trials are advancing.
 - **finished** — the run reached its end and the final submission was accepted.
 - **failed** — the run reached its end and the final submission was not.
-- **aborted** — the page stopped before running any trials (no experiment ID,
-  or no condition assigned).
+- **aborted** — the page stopped before any trial ran (no experiment ID, or no
+  condition assigned). Reached from **ready**; a page with no experiment ID
+  publishes both in the same synchronous pass, so **ready** is never observable
+  for that run.
 
-A driver that cannot evaluate JavaScript reads the same two things from the
-DOM: `document.documentElement.dataset.testbedStatus`, and the full JSON in
-`<pre id="testbed-result">` under *Machine-readable result* at the bottom of
-each page.
+A tab closed mid-run never leaves a terminal status, which is what the
+abandoned-session scenarios look for. **failed** is reachable straight from
+**ready** in one case: the jsPsych page's `?breaksave=1` pre-claim runs before
+the timeline starts, and a run whose pre-claim was refused ends there rather
+than running trials that would prove nothing.
 
-**Read it from the DOM, not from the page global.** A browser extension
-evaluating JavaScript does so in an isolated world and may not see
+**`ready` is the one a driver waits for before sending the start key**, and
+`running` is what proves the key landed. Schema 1 set `running` at page load,
+before any keypress, and a driver that read it as "trials are advancing" was
+wrong twice on 2026-09-19. `startedAt` is likewise when the *page* opened the
+result, not when the participant started.
+
+#### The trial counter
+
+`trialsPlanned` is the `trials` parameter, and `trialsCompleted` reaches it
+exactly on a clean finish — so `trialsCompleted === trialsPlanned` is the whole
+of "it ran to the end", and polling `trialsCompleted` is how a driver acts *at
+trial N* (closing the tab half-way, say) instead of guessing from the clock.
+
+**Instruction screens are not counted**, on either page. The jsPsych page shows
+one instruction trial before the task, and jsPsych records a row for it, so
+with `?trials=10` the stored CSV holds 11 rows while `trialsCompleted` stops at
+10. The counter is about the task; a driver should not have to know how many
+non-task screens a page happens to show first.
+
+#### Reading it
+
+A driver that cannot evaluate JavaScript in the page's own world reads all of
+it from the DOM — on `<html>`:
+
+| Attribute | |
+|---|---|
+| `data-testbed-status` | the status above |
+| `data-testbed-trials-completed` | `trialsCompleted`, updated as each trial ends |
+| `data-testbed-trials-planned` | `trialsPlanned` |
+
+plus the full JSON in `<pre id="testbed-result">` under *Machine-readable
+result* at the bottom of each page.
+
+**The DOM is the primary interface; the page global is not.** A browser
+extension evaluating JavaScript does so in an isolated world and may not see
 `window.__testbed` at all, while DOM reads always work. Treat the global as a
 convenience for same-world drivers such as Playwright.
 
-**`requests` holds only the requests the page issues itself.** The extension
-and `datapipe-client` make their own — `POST /api/session`, the jsPsych page's
-final `POST /api/data`, and the staging writes — and the page cannot see them.
-`fetch` is deliberately not wrapped to catch them: staging uses its own
-transport rather than `fetch`, and the two requests a wrapper *would* intercept
-are the two most easily broken by touching them (a gzip `Blob` body, and
-whatever is sent while the page unloads). What those paths do surface — the
-extension's `on_save` callback, the library warnings mirrored into the log, the
-assigned condition, the session id — is recorded, and `notes` says plainly
-which per-request detail is unavailable.
+#### What `requests` does and does not hold
+
+**Only the requests the page issues itself** carry `source: "page"`, a real
+`ms`, and a URL with no trailing slash. The extension and `datapipe-client`
+make their own — `POST /api/session`, the jsPsych page's final `POST /api/data`,
+and the staging writes — and the page cannot see them. `fetch` is deliberately
+not wrapped to catch them: staging uses its own transport rather than `fetch`,
+and the two requests a wrapper *would* intercept are the two most easily broken
+by touching them (a gzip `Blob` body, and whatever is sent while the page
+unloads). What those paths do surface — the extension's `on_save` callback, the
+library warnings mirrored into the log, the assigned condition, the session id
+— is recorded with `source: "library"`, an unavoidably null `ms`, and a URL
+ending in a slash, and `notes` says plainly which per-request detail is missing.
+
+That slash is not a typo. `datapipe-client`'s `endpoint()`
+(`packages/client/src/http.ts`) builds `${base}/api/${path}/`. It is harmless on
+a live endpoint: Firebase Hosting matches the rewrite with or without the slash
+(checked on datapipe-test, 2026-09-19 — same response, same latency, no
+redirect). It only bites on a path with NO rewrite, which falls through to the
+Next.js app and is 308-redirected to the slashless form. The pages' own requests
+omit the slash, and the recorded URLs are left exactly as each was sent rather
+than tidied into agreement.
+
+#### `sessionId`
+
+**The plain JavaScript page reports it** — it calls `DataPipe.createSession()`
+itself and reads the public `session.sessionId`, as soon as `POST /api/session`
+lands rather than only at the end, so an abandoned run still carries it.
+
+**The jsPsych page leaves it `null`, and that is not a bug.**
+`@jspsych/extension-pipe` 0.2.0 keeps its `DataPipeSession` in a field its
+source declares `private` and exposes nothing else: no getter, no event, and an
+`on_save` result of `{ok, status, body}` with no id in it. TypeScript's
+`private` is erased at runtime, so `jsPsych.extensions.pipe.session.sessionId`
+would in fact answer today — and reaching for it would mean this testbed
+asserts on a library's internals rather than its contract, and breaks on a
+patch release with no semver signal. The run says so in `notes`. The smallest
+upstream fix is a public read-only getter on the extension
+(`get sessionId() { return this.session?.sessionId ?? ""; }`), which would make
+it `jsPsych.extensions.pipe.sessionId`.
+
+#### Schema 1
+
+A cached or not-yet-redeployed copy of these pages publishes `schema: 1`: no
+`ready` (it sat at `running` from load), no trial counter and no
+`source`/`trialsCompleted` fields. Read `schema` from `#testbed-result` before
+relying on any of them.
 
 ### The scenario manifest
 
