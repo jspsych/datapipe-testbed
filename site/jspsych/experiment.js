@@ -87,8 +87,7 @@ if (requireExperiment(params)) {
               label: "final-save",
               // With the trailing slash, because that is the URL the extension
               // actually used: datapipe-client's endpoint() adds it. Recording
-              // the slashless form here would be tidier and untrue, and would
-              // hide the one 308 redirect left on the submission path.
+              // the slashless form here would be tidier and untrue.
               url: `${params.base}/api/data/`,
               source: "library",
               status: result.status,

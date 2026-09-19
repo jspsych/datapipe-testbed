@@ -183,10 +183,12 @@ library warnings mirrored into the log, the assigned condition, the session id
 ending in a slash, and `notes` says plainly which per-request detail is missing.
 
 That slash is not a typo. `datapipe-client`'s `endpoint()`
-(`packages/client/src/http.ts`) builds `${base}/api/${path}/`, and
-`/api/data/` matches no Firebase Hosting rewrite, so every library-issued
-request takes a 308 redirect to the slashless form first. The pages' own
-requests do not, and the recorded URLs are left exactly as each was sent rather
+(`packages/client/src/http.ts`) builds `${base}/api/${path}/`. It is harmless on
+a live endpoint: Firebase Hosting matches the rewrite with or without the slash
+(checked on datapipe-test, 2026-09-19 — same response, same latency, no
+redirect). It only bites on a path with NO rewrite, which falls through to the
+Next.js app and is 308-redirected to the slashless form. The pages' own requests
+omit the slash, and the recorded URLs are left exactly as each was sent rather
 than tidied into agreement.
 
 #### `sessionId`

@@ -9,19 +9,20 @@ export const DEFAULT_BASE = "https://datapipe-test.web.app";
 /**
  * A DataPipe endpoint URL for a request this PAGE makes.
  *
- * No trailing slash, deliberately. `/api/data` is the path firebase.json
- * rewrites to the function; `/api/data/` matches no rewrite, so Firebase
- * Hosting answers it with a 308 redirect to the slashless form. That is a
- * wasted round trip on every submission, and on an error path -- where the
- * redirect target's response carries no CORS headers -- it is where `fetch`
- * gives up with nothing more useful than "Failed to fetch".
+ * No trailing slash, deliberately: it is the path exactly as firebase.json
+ * spells the rewrite. On a LIVE endpoint the slash makes no difference --
+ * Firebase Hosting matches the rewrite either way (checked on datapipe-test,
+ * 2026-09-19: same response, same latency, no redirect). It matters on a path
+ * with no rewrite at all -- a removed endpoint, a typo -- which falls through
+ * to the Next.js app, gets a 308 to the slashless form, and then a CORS-less
+ * 404 that `fetch` reports as nothing more useful than "Failed to fetch". A
+ * driver probing whether a route is gone needs the slashless form to get a
+ * real status back.
  *
- * datapipe-client does NOT do this, and this repo cannot make it: `endpoint()`
- * in packages/client/src/http.ts builds `${base}/api/${path}/` with the slash,
- * so POST /api/session, POST /api/condition and the jsPsych page's final
- * POST /api/data all still take the redirect. That is the whole reason a
- * recorded request's url ends in a slash when `source` is "library" and does
- * not when `source` is "page".
+ * datapipe-client spells it the other way: `endpoint()` in
+ * packages/client/src/http.ts builds `${base}/api/${path}/`. That is the whole
+ * reason a recorded request's url ends in a slash when `source` is "library"
+ * and does not when `source` is "page" -- each is recorded as it was sent.
  */
 export function endpointURL(base, path) {
   return `${base}/api/${path}`;
