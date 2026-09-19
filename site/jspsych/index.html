@@ -29,6 +29,15 @@
     <section class="log-panel" aria-label="Request log">
       <h2>Log</h2>
       <div id="log" class="log"></div>
+      <!--
+        The same run in the form a driver asserts on. Collapsed, because these
+        pages are read on phones and a wall of JSON under every run would push
+        the log off the screen. See common.js for the contract.
+      -->
+      <details class="result-panel">
+        <summary>Machine-readable result</summary>
+        <pre id="testbed-result"></pre>
+      </details>
     </section>
     <script type="module" src="./experiment.js"></script>
   </body>

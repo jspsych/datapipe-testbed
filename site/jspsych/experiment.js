@@ -14,11 +14,18 @@ import {
   describeRun,
   requireExperiment,
   makeFilename,
+  startResult,
+  setResultStatus,
+  recordRequest,
+  noteResult,
+  addFilename,
 } from "../common.js";
 
 const params = readParams();
+startResult("jspsych", params);
 mirrorClientWarnings();
 describeRun(params, {
+  run: params.run || "—",
   trials: params.trials,
   format: params.format,
   stream: params.stream ? "on" : "off",
@@ -26,6 +33,16 @@ describeRun(params, {
   breaksave: params.breaksave ? "ON" : "off",
   abort: params.abort ? `at trial ${params.abort}` : "off",
 });
+
+// Everything this page does with DataPipe after the pre-claim below happens
+// inside the extension. Said once, up front, so a driver reading the result
+// never has to guess whether an empty `requests` means "nothing was sent".
+noteResult(
+  "extension-pipe issues POST /api/session, the staging writes and the final " +
+    "POST /api/data itself; per-request detail for those is unavailable to the " +
+    "page. The final save is recorded from the extension's on_save callback, " +
+    "and any degraded path it reports arrives as an `extension-pipe:` note."
+);
 
 if (requireExperiment(params)) {
   const jsPsych = initJsPsych({
@@ -44,6 +61,17 @@ if (requireExperiment(params)) {
           base_url: params.base,
           on_save: (result) => {
             log(`final save ${result.ok ? "SUCCEEDED" : "FAILED"} (HTTP ${result.status})`, result.body);
+            saved = true;
+            recordRequest({
+              label: "final-save",
+              url: `${params.base}/api/data/`,
+              status: result.status,
+              ok: result.ok,
+              // Not timed: the extension started this request, not the page.
+              ms: null,
+              error: result.ok ? undefined : result.body?.error ?? result.body,
+            });
+            setResultStatus(result.ok ? "finished" : "failed");
           },
         },
       },
@@ -52,11 +80,26 @@ if (requireExperiment(params)) {
       document.getElementById("target").innerHTML =
         '<p class="notice">Finished. Check the log below, then the experiment\'s dashboard ' +
         "and your storage for the file.</p>";
+      // on_save may land before or after this, so the terminal status is set
+      // there and not here. The watchdog only exists so that an extension that
+      // never calls back leaves a driver with an answer rather than a run that
+      // sits at "running" forever -- which is the one status that is supposed
+      // to mean "the participant is still going".
+      if (saved) return;
+      noteResult("timeline finished; waiting for the extension's on_save callback");
+      setTimeout(() => {
+        if (saved) return;
+        noteResult("no on_save callback within 30s of the timeline ending");
+        setResultStatus("failed");
+      }, 30000);
     },
   });
 
+  let saved = false;
+
   const participantId = jsPsych.randomization.randomID(8);
-  const filename = makeFilename(participantId, params.format);
+  const filename = makeFilename(participantId, params.format, params.run);
+  addFilename(filename);
   const letters = ["F", "J"];
 
   const timeline = [
@@ -87,6 +130,7 @@ if (requireExperiment(params)) {
             const n = jsPsych.data.get().filter({ task: "testbed-letter" }).count();
             if (params.abort && n >= params.abort) {
               log(`aborting at trial ${n} -- the extension should still submit`);
+              noteResult(`timeline ended early at trial ${n} of ${params.trials}`);
               jsPsych.abortExperiment("<p>Ended early, as an attention check would.</p>");
             }
           },
@@ -95,6 +139,24 @@ if (requireExperiment(params)) {
       repetitions: params.trials,
     },
   ];
+
+  /**
+   * A pre-claim payload DataPipe will actually accept.
+   *
+   * It has to survive two gates the old plain-sentence body did not. With
+   * Psych-DS metadata on, the raw submission is parsed to derive the dataset's
+   * tables, and anything that is not CSV or JSON is refused with
+   * METADATA_ERROR. With validation on -- which is the DEFAULT for a new
+   * experiment (`requiredFields: ["trial_type"]` in create-experiment.ts) --
+   * a row without a `trial_type` column is refused with INVALID_DATA. This is
+   * the smallest body that passes both, and it deliberately mirrors the shape
+   * of what the run itself submits.
+   */
+  function preclaimBody(format) {
+    const row = { trial_type: "html-keyboard-response", trial_index: 0, rt: 100 };
+    if (format === "json") return JSON.stringify([row]);
+    return `${Object.keys(row).join(",")}\n${Object.values(row).join(",")}\n`;
+  }
 
   async function run() {
     log(`filename ${filename}`);
@@ -112,16 +174,45 @@ if (requireExperiment(params)) {
       // refusal, so the staged trials should come back as a hash-suffixed
       // .partial.json rather than being discarded with the rejected request.
       log("breaksave: claiming the filename first, so the final save is refused");
-      const response = await fetch(`${params.base}/api/data/`, {
+      const url = `${params.base}/api/data/`;
+      const startedAt = performance.now();
+      const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "*/*" },
         body: JSON.stringify({
           experimentID: params.experiment,
           filename,
-          data: "claimed by the testbed to force a duplicate-filename refusal\n",
+          data: preclaimBody(params.format),
         }),
       });
-      log(`  pre-claim responded ${response.status}`);
+      const body = await response.json().catch(() => null);
+      log(`  pre-claim responded ${response.status}`, body ?? undefined);
+      // The page's own request, so it is timed and recorded in full -- unlike
+      // the extension's save below.
+      recordRequest({
+        label: "preclaim",
+        url,
+        status: response.status,
+        ms: Math.round(performance.now() - startedAt),
+        error: response.ok ? undefined : (body?.error ?? body),
+      });
+
+      // STOP if the claim did not land. Observed against datapipe-test on
+      // 2026-09-19: the old pre-claim body was a plain sentence, which a
+      // Psych-DS experiment refuses with METADATA_ERROR before the name is
+      // ever taken. The run then went on to SUCCEED, and the scenario
+      // reported a pass while testing nothing it claimed to test. A run whose
+      // pre-claim failed is meaningless, so it ends here and says so.
+      if (!response.ok) {
+        const detail = body?.error ?? response.status;
+        log(`  breaksave ABORTED: the filename was not claimed (${detail})`);
+        document.getElementById("target").innerHTML =
+          `<p class="notice">breaksave could not claim the filename (${detail}), so the ` +
+          "final save would not be refused. The run was not started. See the log.</p>";
+        noteResult(`breaksave pre-claim failed (${detail}); the timeline was not run`);
+        setResultStatus("failed");
+        return;
+      }
     }
 
     jsPsych.run(timeline);
