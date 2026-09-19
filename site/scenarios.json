@@ -2,7 +2,7 @@
   "schema": 1,
   "updated": "2026-09-19",
   "about": "The end-to-end scenarios for a DataPipe deployment, as data rather than prose. site/index.html renders its \"What to check\" list from this file, and the e2e-testbed skill in the datapipe repo drives it. Add `experiment`, `base` and `run` to each scenario's params to build a URL.",
-  "observed": "Parts of this manifest were checked against https://datapipe-test.web.app at commit a10464c on 2026-09-19. Each scenario carries an `observed` field saying what that run actually saw. Everything else is derived from the handler code and is still unconfirmed against a live deployment.",
+  "observed": "Parts of this manifest were checked against https://datapipe-test.web.app at commit a10464c on 2026-09-19, and again at commit e1a6862 (datapipe #262 live from 22:33Z) during the 22:26-23:08Z run that first drove the result contract. Each scenario carries an `observed` field saying what those runs actually saw. Everything else is derived from the handler code and is still unconfirmed against a live deployment.",
   "defaults": {
     "base": "https://datapipe-test.web.app",
     "pages": {
@@ -10,7 +10,10 @@
       "vanilla": "vanilla/"
     },
     "runParam": "run",
-    "resultContract": "Read `document.documentElement.dataset.testbedStatus` and the JSON text of `#testbed-result` from the DOM. `window.__testbed` holds the same object, but a browser extension evaluating JavaScript in an isolated world may not see a page global -- prefer the DOM."
+    "resultContract": "Result contract SCHEMA 2. Read `document.documentElement.dataset.testbedStatus`, `.testbedTrialsCompleted` and `.testbedTrialsPlanned` (the `data-testbed-status`, `data-testbed-trials-completed` and `data-testbed-trials-planned` attributes on `<html>`), plus the JSON text of `#testbed-result`, from the DOM. `window.__testbed` holds the same object, but a browser extension evaluating JavaScript in an isolated world may not see a page global -- prefer the DOM. Read `schema` from `#testbed-result` first: a cached schema-1 page has no `ready` status (it reads `running` from load), no trial counter and no `source` on its requests, and every expectation below that names one of those has to fall back to the schema-1 behaviour.",
+    "statusMachine": "ready -> running -> finished | failed, and ready -> aborted. `ready` means loaded, settings valid, waiting for the participant's first keypress -- BOTH pages sit there on \"Press any key to start\". `running` means the first trial has started. `failed` is also reachable straight from `ready` when the jsPsych page's breaksave pre-claim is refused.",
+    "startingARun": "Both pages wait for a real keypress, and the first one after a navigation is usually swallowed (OBSERVED twice on 2026-09-19; `space` never worked, `f` did). Wait for `data-testbed-status` to read `ready`; then, in SEPARATE tool calls, click the page body and send ONE `f`; then verify. VERIFY MEANS `data-testbed-status` HAS MOVED FROM `ready` TO `running` -- while it still reads `ready` the key did not land, so click and send again. `f` is also a valid trial response, so an extra keypress is harmless.",
+    "trialCounter": "`trialsPlanned` is the `trials` parameter; `trialsCompleted` counts only the task's own trials and reaches `trialsPlanned` exactly on a clean finish. Instruction screens are NOT counted on either page, so the jsPsych page's stored CSV holds one row more than `trialsCompleted` (its instruction trial). Poll `data-testbed-trials-completed` to act at a given trial rather than timing it off the clock."
   },
   "preconditions": {
     "experiment": "A fresh experiment on the deployment under test, storing to Google Drive (new experiments cannot choose OSF). Record its ID.",
@@ -30,9 +33,10 @@
     "sweepCron": "*/5 (staging sweep and upload retry every tick; pending recovery on the :00/:15/:30/:45 slots; mail retry on :00/:10/...)",
     "recoveredPartialFirstAttemptMinutes": 60,
     "observedAbandonToQueueMinutes": 12,
-    "note": "A recovered session is QUEUED by the sweep, not uploaded by it. queue-upload.ts gives an entry with no provider error code nextRetryAt = now + 1 hour, and the retry worker runs on */5 -- so a partial file reaches storage roughly 65-75 minutes after the participant dropped out, not 15. For that hour the dashboard's queue panel describes it as an upload that did not go through, with retryCount 0 and lastAttemptAt null. That is expected, not a bug.",
+    "note": "A recovered session is QUEUED by the sweep, not uploaded by it. queue-upload.ts gives an entry with no provider error code nextRetryAt = now + 1 hour, and the retry worker runs on */5 -- so a partial file reaches storage roughly 65-75 minutes after the participant dropped out, not 15. For that hour the dashboard's queue panel lists it as \"Waiting to be stored\" (datapipe #262; it is no longer described as a failed upload), with retryCount 0 and lastAttemptAt null. That is expected, not a bug.",
+    "observedAbandonToQueue": "Measured twice on 2026-09-19: ~12 min on the 17:00Z run, and 10 min 7 s on the 22:30Z one -- tab closed 22:30:06, queue entry createdAt 22:40:13, nextRetryAt 23:40:13 (exactly +1 h). Use 10-14 min as the window to start looking.",
     "whenTheClockStarts": "For an abandoned tab, at the socket drop -- an open tab counts as live. For a refused final submission, datapipe-client stamps the session abandoned IMMEDIATELY (packages/client/src/session.ts, `close({submitted:false})`), so the clock starts at the refusal; whether @jspsych/extension-pipe does the same is not verified, so close the tab promptly afterwards either way. The 24-hour `expiresAt` is the backstop behind both.",
-    "observedPageRates": "jsPsych page with auto=1: 1.1-1.7 s per trial. Vanilla page with auto=1: 400 ms per trial. A /api/data call that writes to Drive: 2-4.5 s."
+    "observedPageRates": "jsPsych page with auto=1: 1.1-1.7 s per trial (60 trials ran in ~66 s on 2026-09-19, i.e. the fast end). Vanilla page with auto=1: 400 ms per trial. A /api/data call that writes to Drive: 2-4.5 s. Size any \"act at trial N\" step off the FAST end, and add the cost of the driver's own polling -- a browser-extension tool call costs a few seconds, so a 5 s poll cadence can overshoot by 20-30 s."
   },
   "knownIssues": [
     {
@@ -45,7 +49,18 @@
       "id": "metadata-error-is-recovered-later",
       "summary": "A submission refused with 400 METADATA_ERROR keeps its pending Cloud Storage copy on purpose (api-data.ts: \"scheduled-pending-recovery salvages it later instead of losing it outright\"). METADATA_ERROR means metadata generation failed, not that the participant's data was refused, and the policy is never to destroy raw data over it.",
       "consequence": "Within the next pending-recovery slot (:00/:15/:30/:45, for entries older than ~15 minutes) a queue entry appears for that filename. EXPECT it. Do not flag it. Its failureReason is \"Kept after a metadata failure (raw data stored without Psych-DS files)\" on a deployment that has datapipe #262 (api-data.ts labels the pending copy, scheduled-pending-recovery.ts reads the label), and the generic \"Recovered from interrupted upload (server restart or memory limit)\" on one that does not -- accept either, and say which you saw. With #262 the dashboard's queue panel shows the entry as \"Waiting to be stored\", not \"Retrying\": it has not failed.",
-      "observed": "3 such entries at 17:15 UTC, 2026-09-19, one per METADATA_ERROR refusal."
+      "observed": "3 such entries at 17:15 UTC, 2026-09-19, one per METADATA_ERROR refusal. Timed end to end on the same day against datapipe #262: a probe refused at 22:33:47Z entered the queue at ~23:00:30Z (the :00 slot, 27 min later) with failureReason \"Kept after a metadata failure (raw data stored without Psych-DS files)\" -- the NEW label -- nextRetryAt createdAt+~1 min, and was stored by ~23:05Z. So a kept copy is visible in the queue for only about 5 minutes: miss that window and the only evidence left is the rejections panel."
+    },
+    {
+      "id": "rejections-panel-hidden-behind-the-queue",
+      "summary": "The dashboard shows the rejections panel only while the upload queue is empty.",
+      "consequence": "Any `expectDashboard` line about an error-panel entry can only be checked when nothing is queued. After a recovery scenario has queued a partial, that is roughly 1 h 5 min away -- the entry's first storage attempt is nextRetryAt, an hour after it was queued. Check the rejections panel BEFORE running the recovery scenarios, or use `GET /api/queuestatus` and the endpoint response codes as the evidence instead.",
+      "observed": "2026-09-19: the panel was never visible after 22:40Z, so the reworded METADATA_ERROR detail from datapipe #261 was never seen on the new build, and \"Clear this list\" was never exercised."
+    },
+    {
+      "id": "queue-panel-is-mid-polish",
+      "summary": "datapipe #262 landed the waiting/retrying/failed split, and a follow-up polish PR to QueuePanel.js is in flight.",
+      "consequence": "Assert on the three KINDS (\"Waiting to be stored\" / \"Retrying\" / \"Failed\") and on the panel's weight (plain neutral panel when everything is waiting; quiet orange left edge when something is retrying; a filled red alert only for a permanent failure). Do NOT assert on the column headers, the row sub-line wording or how a filename is written -- those are being changed. Report a mismatch there as \"the panel is mid-polish\", not as a failure."
     },
     {
       "id": "assert-on-code-never-message",
@@ -66,11 +81,15 @@
       "description": "jsPsych with save-as-you-go. The dashboard shows one session in progress with a running time while you work; it disappears when you finish, and exactly one file lands in storage.",
       "page": "jspsych",
       "params": { "trials": "20", "format": "csv", "auto": "1", "stream": "1" },
-      "driverActions": [],
+      "driverActions": ["Start the run as `defaults.startingARun` describes: wait for `ready`, click, send one `f`, confirm the status has moved to `running`."],
       "expectPage": {
         "status": "finished",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
-        "notes": ["expect an `extension-pipe:` note only if something degraded"]
+        "trials": "trialsCompleted === trialsPlanned === 20 -- the run reached the end rather than being cut short",
+        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "library" }],
+        "notes": [
+          "expect an `extension-pipe:` note only if something degraded",
+          "a note saying sessionId is null on this page by design"
+        ]
       },
       "expectDashboard": [
         "While running: a \"Sessions in progress\" panel with a row reading \"In progress\" and a \"Running for\" value. Match the row, not the count.",
@@ -90,7 +109,7 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "2026-09-19 with trials=40: final save 201, file in data/raw/, in-progress row behaved as described. PASS."
+      "observed": "2026-09-19 with trials=40: final save 201, file in data/raw/, in-progress row behaved as described. PASS. Re-run at 22:26:32Z with trials=60 (the run that was meant to be abandoned and finished first): 60 trials in ~66 s, status finished at 22:28:11Z, one recorded request `final-save` 201 to https://datapipe-test.web.app/api/data/ -- and the completed-session count on the dashboard went 5 to 6. PASS."
     },
     {
       "id": "baseline-no-streaming",
@@ -99,10 +118,11 @@
       "description": "With save-as-you-go off there is one submission at the end, as before incremental upload existed. One file, and no in-progress row at any point.",
       "page": "jspsych",
       "params": { "trials": "20", "format": "json", "auto": "1", "stream": "0" },
-      "driverActions": [],
+      "driverActions": ["Start the run as `defaults.startingARun` describes."],
       "expectPage": {
         "status": "finished",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }]
+        "trials": "trialsCompleted === trialsPlanned === 20",
+        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "library" }]
       },
       "expectDashboard": [
         "No row for this run in \"Sessions in progress\" at any point -- nothing calls /api/session.",
@@ -130,10 +150,11 @@
       "description": "Set `abort` below the trial count and the experiment stops as a failed attention check would. The data is still submitted — the behaviour a save trial never had, because an aborted timeline never reaches one.",
       "page": "jspsych",
       "params": { "trials": "20", "abort": "5", "format": "csv", "auto": "1", "stream": "1" },
-      "driverActions": [],
+      "driverActions": ["Start the run as `defaults.startingARun` describes."],
       "expectPage": {
         "status": "finished",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
+        "trials": "trialsCompleted === 5, trialsPlanned === 20 -- the clearest single assertion that the abort fired where it was told to",
+        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "library" }],
         "notes": ["a note reading \"timeline ended early at trial 5 of 20\""]
       },
       "expectDashboard": ["No row for this run afterwards; no new error-panel entry; no queue entry."],
@@ -160,12 +181,13 @@
       "page": "vanilla",
       "params": { "trials": "20", "format": "csv", "auto": "1", "stream": "1", "compress": "1" },
       "driverActions": [
-        "Open the URL, click the page body, then send a single `f` keypress in a SEPARATE call. Assert the first trial appeared before waiting."
+        "Start the run as `defaults.startingARun` describes: wait for `ready`, click the page body, send a single `f` in a SEPARATE call, and confirm `data-testbed-status` has moved to `running` before waiting on anything."
       ],
       "expectPage": {
         "status": "finished",
-        "sessionId": "a non-empty string; this page, unlike the jsPsych one, can report it",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }]
+        "trials": "trialsCompleted === trialsPlanned === 20",
+        "sessionId": "a non-empty string; this page, unlike the jsPsych one, can report it -- and it appears as soon as POST /api/session lands, not only at the end",
+        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "page", "ms": "a real duration; the page issued this one itself" }]
       },
       "expectDashboard": [
         "While running: a row for this run reading \"In progress\".",
@@ -193,10 +215,11 @@
       "description": "The same run with gzip off, so the submission goes through the hosting layer as a plain JSON body. Worth running alongside the compressed one because gzip and the hosting rewrite are the two things in front of `/api/data` that can each break on their own.",
       "page": "vanilla",
       "params": { "trials": "20", "format": "csv", "auto": "1", "stream": "1", "compress": "0" },
-      "driverActions": ["Open the URL, click the body, then send `f` in a separate call."],
+      "driverActions": ["Start the run as `defaults.startingARun` describes."],
       "expectPage": {
         "status": "finished",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }]
+        "trials": "trialsCompleted === trialsPlanned === 20",
+        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "page" }]
       },
       "expectDashboard": ["Identical to vanilla-streaming."],
       "expectStorage": {
@@ -222,16 +245,17 @@
       "page": "vanilla",
       "params": { "trials": "5", "format": "csv", "auto": "1", "stream": "0", "resubmit": "1" },
       "driverActions": [
-        "Open the URL, click the body, then send `f` in a separate call. `resubmit=1` presses \"Send the same file again\" itself; without it, click that button by hand."
+        "Start the run as `defaults.startingARun` describes. `resubmit=1` presses \"Send the same file again\" itself; without it, click that button by hand."
       ],
       "expectPage": {
         "status": "finished",
+        "trials": "trialsCompleted === trialsPlanned === 5",
         "requests": [
-          { "label": "final-save", "status": 201, "ok": true },
-          { "label": "resubmit", "status": 400, "ok": false, "error": "FILE_EXISTS" }
+          { "label": "final-save", "status": 201, "ok": true, "source": "page" },
+          { "label": "resubmit", "status": 400, "ok": false, "error": "FILE_EXISTS", "source": "page" }
         ]
       },
-      "expectDashboard": ["A new error-panel entry with the code FILE_EXISTS. Assert on the code, not the message."],
+      "expectDashboard": ["A new rejections-panel entry with the code FILE_EXISTS. Assert on the code, not the message. The panel is only rendered while the upload queue is empty -- see knownIssues."],
       "expectStorage": {
         "files": 1,
         "countBy": "files matching this run's filename stem -- the second request must not add a copy or overwrite the first",
@@ -256,16 +280,17 @@
       "params": { "trials": "5", "format": "csv", "auto": "1", "stream": "0", "failvalidation": "1" },
       "driverActions": [
         "Nothing on the dashboard. This scenario exercises the DEFAULT validation settings, so do not change them.",
-        "Open the URL, click the body, then send `f` in a separate call.",
+        "Start the run as `defaults.startingARun` describes.",
         "`stream=0` on purpose: api-data.ts deliberately leaves staged trials alone on INVALID_DATA, so a streamed run here would leave a recoverable session behind and turn this into a deferred scenario."
       ],
       "expectPage": {
         "status": "failed",
-        "requests": [{ "label": "final-save", "status": 400, "ok": false, "error": "INVALID_DATA" }],
+        "trials": "trialsCompleted === trialsPlanned === 5. `failed` is about the SUBMISSION, not the run: every trial ran, and the counter is how you tell the two apart.",
+        "requests": [{ "label": "final-save", "status": 400, "ok": false, "error": "INVALID_DATA", "source": "page" }],
         "notes": ["a note reading \"failvalidation: `trial_type` is omitted from every row on purpose\""]
       },
       "expectDashboard": [
-        "A new error-panel entry with the code INVALID_DATA.",
+        "A new rejections-panel entry with the code INVALID_DATA. Only visible while the upload queue is empty -- see knownIssues.",
         "No queue entry, now or later."
       ],
       "expectStorage": {
@@ -289,24 +314,28 @@
       "title": "Abandoned tab",
       "description": "Close the tab half-way. Within seconds the dashboard row reads `Connection lost — may resume`; after 10 minutes, `Stopped — being recovered`; the sweep then queues the staged trials, and the `.partial.json` reaches storage about an hour later, not within 15 minutes.",
       "page": "jspsych",
-      "params": { "trials": "60", "format": "csv", "auto": "1", "stream": "1" },
+      "params": { "trials": "120", "format": "csv", "auto": "1", "stream": "1" },
       "driverActions": [
-        "Open the URL and let it run to about trial 50 of 60 (roughly 60-80 s).",
+        "Start the run as `defaults.startingARun` describes, and do not go on until `data-testbed-status` reads `running`.",
         "Read the result and KEEP the first filename FIRST -- it is unrecoverable once the tab is gone, and it is the only way to recognise the partial later.",
-        "Close the tab. Note the wall-clock time: the recovery clock starts at the socket drop. An open tab counts as live."
+        "Poll `data-testbed-trials-completed` about every 5 s. Close the tab when it reaches about half of `data-testbed-trials-planned` (~60). Do NOT time this off the clock.",
+        "Note the wall-clock time of the close: the recovery clock starts at the socket drop. An open tab counts as live."
       ],
+      "sizingNote": "trials was raised from 60 to 120 on purpose, rather than leaving 60 and polling faster. At the FAST end of the measured pace (1.1 s/trial, the rate the 2026-09-19 run actually hit) 60 trials finish in ~66 s, so half-way arrives at ~33 s and leaves only ~33 s of margin -- less than a poll-and-close cycle of extension tool calls reliably fits in. That run overshot and the tab FINISHED before it could be closed, then produced 40 trials on the retry instead of the 30 aimed at. At 120 trials the run lasts 132-204 s, half-way arrives at 66-102 s, and there is 66-102 s left afterwards: even a 30 s overshoot closes the tab around trial 87 of 120, still plainly partial. A 5 s cadence is then comfortable, and the cost is ~2 minutes of waiting.",
       "expectPage": {
         "status": "running",
+        "trials": "trialsCompleted is roughly half of trialsPlanned (~60 of 120) and MUST be less than trialsPlanned -- if it reached it, the run finished and this scenario did not happen. Record the exact value: it is what the queue entry's \"Recovered from an abandoned session (N trials)\" should agree with.",
         "requests": [],
         "notes": [
-          "The page never reaches a terminal status: the tab is gone. The last status read before closing must be \"running\".",
-          "sessionId is null on this page -- extension-pipe does not surface it."
+          "The page never reaches a terminal status: the tab is gone. The last status read before closing must be \"running\" -- not `ready`, which only means the start key never landed.",
+          "sessionId is null on this page by design -- extension-pipe 0.2.0 exposes no public way to read it. The run says so itself in `notes`."
         ]
       },
       "expectDashboard": [
         "Within seconds of the tab closing: the row for this run reads \"Connection lost — may resume\".",
         "About 10-12 minutes later: \"Stopped — being recovered\".",
-        "Then the row disappears and a queue entry appears with failureReason \"Recovered from an abandoned session (N trials)\", status pending, retryCount 0, lastAttemptAt null, nextRetryAt one hour out."
+        "Then the row disappears and a queue entry appears with failureReason \"Recovered from an abandoned session (N trials)\", status pending, retryCount 0, lastAttemptAt null, nextRetryAt one hour out. N should match the trialsCompleted you read before closing.",
+        "The queue panel lists it under the kind \"Waiting to be stored\", in a plain neutral panel with no coloured edge -- nothing has failed. Do not assert on the panel's column headers or row sub-lines; see knownIssues."
       ],
       "expectStorage": {
         "files": 1,
@@ -316,14 +345,14 @@
         "location": "experiment folder root, or data/raw/ with metadata on"
       },
       "timing": {
-        "pageRun": "~60-80 s, then closed",
+        "pageRun": "~70-105 s to half-way at 120 trials, then closed",
         "checkDashboardAfter": "immediately, at ~11 min, and at ~14 min",
         "checkStorageAfter": "65-75 minutes after the tab was closed"
       },
       "deferredCheck": true,
       "deferredNote": "Re-open the folder 75 minutes after the tab was closed and look for one *.partial.json matching this run's filename stem. Until then `GET /api/queuestatus?experimentID=<id>` is better evidence than the dashboard panel: it shows retryCount and lastAttemptAt. A queue entry that has never been attempted is the expected state, not a failure.",
       "automation": "agent",
-      "observed": "2026-09-19 with trials=60, closed at ~50: queued 12 min after the tab closed as `data/raw/testbed-...-6b33aa40.partial.json`, nextRetryAt exactly +60 min, live row transitions as described. PASS up to the queue; the Drive write itself was not waited for."
+      "observed": "2026-09-19 with trials=60, closed at ~50: queued 12 min after the tab closed as `data/raw/testbed-...-6b33aa40.partial.json`, nextRetryAt exactly +60 min, live row transitions as described. PASS up to the queue; the Drive write itself was not waited for. Re-run at 22:29Z, also trials=60: the FIRST attempt overshot and the run finished on its own in ~66 s (which is why trials is now 120 and the driver polls the counter); the second closed the tab at 22:30:06Z at 40 trials. Queue entry createdAt 22:40:13Z -- 10 min 7 s later -- filename `data/raw/testbed-queue-ui-2229-20260919T222844-5bbq3d6n-0fc2d2a7.partial.json`, status pending, errorCode 0, retryCount 0, lastAttemptAt null, nextRetryAt 23:40:13Z (+1 h exactly), failureReason \"Recovered from an abandoned session (40 trials)\" -- N matched the trials that had run. The dashboard row read \"Connection lost — may resume\" at 22:34Z. The queue panel listed it as \"Waiting to be stored\" in a plain neutral panel (measured: no fill, uniform 1px grey border). PASS up to the queue; the Drive write was again not waited for."
     },
     {
       "id": "failed-final-submission",
@@ -333,20 +362,23 @@
       "page": "jspsych",
       "params": { "trials": "20", "format": "csv", "auto": "1", "stream": "1", "breaksave": "1" },
       "driverActions": [
-        "Open the URL. If the pre-claim is refused the page now stops with status \"failed\" and a note instead of running -- that is a FAIL of the scenario, and the note says which code came back.",
+        "Open the URL. The pre-claim runs BEFORE the timeline, while the status already reads `ready`, so wait for the `preclaim` request to appear in the result rather than sending a key straight away.",
+        "If the pre-claim is refused the page stops with status \"failed\" and a note instead of running -- `ready` goes straight to `failed` with trialsCompleted 0. That is a FAIL of the scenario, and the note says which code came back.",
+        "Otherwise start the run as `defaults.startingARun` describes and let it reach the end.",
         "After the final save is refused, CLOSE THE TAB promptly. datapipe-client stamps the session abandoned at the refusal, but whether extension-pipe does the same is unverified; closing removes the doubt.",
         "Note the wall-clock time of the refusal."
       ],
       "expectPage": {
         "status": "failed",
+        "trials": "trialsCompleted === trialsPlanned === 20. trialsCompleted 0 with status failed means the PRE-CLAIM was refused and no timeline ran -- a different outcome, and a FAIL.",
         "requests": [
-          { "label": "preclaim", "status": 201, "ok": true },
-          { "label": "final-save", "status": 400, "ok": false, "error": "FILE_EXISTS" }
+          { "label": "preclaim", "status": 201, "ok": true, "source": "page", "ms": "a real duration" },
+          { "label": "final-save", "status": 400, "ok": false, "error": "FILE_EXISTS", "source": "library" }
         ]
       },
       "expectDashboard": [
-        "A new error-panel entry with the code FILE_EXISTS.",
-        "Within about 15 minutes of the refusal: a queue entry for `<stem>-<8 hex>.partial.json`."
+        "A new rejections-panel entry with the code FILE_EXISTS -- visible only while the upload queue is empty, so check it BEFORE the partial is queued.",
+        "Within about 15 minutes of the refusal: a queue entry for `<stem>-<8 hex>.partial.json`, kind \"Waiting to be stored\"."
       ],
       "expectStorage": {
         "files": 2,
@@ -375,13 +407,14 @@
       "params": { "trials": "10", "format": "csv", "auto": "1", "stream": "1", "condition": "1" },
       "driverActions": [
         "Switch \"Assign conditions in sequence\" ON and set \"How many conditions?\" to 2. Click the visible switch track, not the hidden checkbox, and wait for the \"Saved\" badge.",
-        "Open the URL, click the body, then send `f` in a separate call.",
+        "Start the run as `defaults.startingARun` describes. The condition is requested before the page is ready, so `condition` is already filled in while the status still reads `ready`.",
         "Run it twice to see the sequence advance."
       ],
       "expectPage": {
         "status": "finished",
+        "trials": "trialsCompleted === trialsPlanned === 10",
         "condition": "an integer in 0..n-1; two runs in a row give 0 then 1, since assignment is sequential and wraps",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
+        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "page" }],
         "notes": ["a note saying the /api/condition request was made inside datapipe-client"]
       },
       "expectDashboard": ["Nothing specific; the condition counter is not surfaced in the UI."],
@@ -410,15 +443,16 @@
       "params": { "trials": "10", "format": "csv", "auto": "1", "stream": "1", "condition": "1" },
       "driverActions": [
         "Switch \"Assign conditions in sequence\" OFF and wait for the \"Saved\" badge.",
-        "Open the URL. No keypress is needed -- the page stops before it asks for one."
+        "Open the URL. No keypress is needed -- the page stops before it asks for one, so `data-testbed-status` goes `ready` to `aborted` and never reads `running`. Do not wait for `running` here; poll for a terminal status."
       ],
       "expectPage": {
         "status": "aborted",
+        "trials": "trialsCompleted === 0, trialsPlanned === 10 -- nothing ran",
         "requests": [],
         "notes": ["a note beginning \"getCondition threw\""],
         "serverSide": "POST /api/condition answers 400 with error CONDITION_ASSIGNMENT_NOT_ACTIVE. The page cannot see the status directly, because datapipe-client throws rather than returning it -- confirm the code with the direct probe in the skill's endpoint table if it matters."
       },
-      "expectDashboard": ["A new error-panel entry with the code CONDITION_ASSIGNMENT_NOT_ACTIVE."],
+      "expectDashboard": ["A new rejections-panel entry with the code CONDITION_ASSIGNMENT_NOT_ACTIVE. Only visible while the upload queue is empty."],
       "expectStorage": { "files": 0, "countBy": "n/a", "naming": "n/a", "completeness": "nothing is written", "location": "n/a" },
       "timing": {
         "pageRun": "~2 s",
@@ -438,16 +472,17 @@
       "params": { "trials": "3", "format": "csv", "auto": "1", "stream": "0", "base64": "1" },
       "driverActions": [
         "Switch \"Accept base64 file uploads\" ON first. Without it the endpoint answers 400 BASE64DATA_COLLECTION_NOT_ACTIVE before it ever looks at the payload.",
-        "Open the URL, click the body, then send `f` in a separate call."
+        "Start the run as `defaults.startingARun` describes."
       ],
       "expectPage": {
         "status": "finished",
+        "trials": "trialsCompleted === trialsPlanned === 3",
         "requests": [
-          { "label": "final-save", "status": 201, "ok": true },
-          { "label": "base64", "status": 201, "ok": true }
+          { "label": "final-save", "status": 201, "ok": true, "source": "page" },
+          { "label": "base64", "status": 201, "ok": true, "source": "page" }
         ]
       },
-      "expectDashboard": ["No new error-panel entry."],
+      "expectDashboard": ["No new rejections-panel entry."],
       "expectStorage": {
         "files": 2,
         "countBy": "files matching this run's filename stem",
@@ -473,16 +508,17 @@
       "params": { "trials": "3", "format": "csv", "auto": "1", "stream": "0", "base64": "invalid" },
       "driverActions": [
         "\"Accept base64 file uploads\" must still be ON: the active check runs BEFORE the validity check, so with it off this scenario returns the wrong code and proves nothing.",
-        "Open the URL, click the body, then send `f` in a separate call."
+        "Start the run as `defaults.startingARun` describes."
       ],
       "expectPage": {
         "status": "finished",
+        "trials": "trialsCompleted === trialsPlanned === 3",
         "requests": [
-          { "label": "final-save", "status": 201, "ok": true },
-          { "label": "base64", "status": 400, "ok": false, "error": "INVALID_BASE64_DATA" }
+          { "label": "final-save", "status": 201, "ok": true, "source": "page" },
+          { "label": "base64", "status": 400, "ok": false, "error": "INVALID_BASE64_DATA", "source": "page" }
         ]
       },
-      "expectDashboard": ["A new error-panel entry with the code INVALID_BASE64_DATA."],
+      "expectDashboard": ["A new rejections-panel entry with the code INVALID_BASE64_DATA. Only visible while the upload queue is empty."],
       "expectStorage": {
         "files": 1,
         "countBy": "files matching this run's filename stem -- the data file only, no .b64.txt",
@@ -506,13 +542,14 @@
       "page": "jspsych",
       "params": { "trials": "200", "format": "csv", "auto": "1", "stream": "1" },
       "driverActions": [
-        "Open the URL and let it run for ~10 seconds.",
+        "Start the run as `defaults.startingARun` describes, then let `data-testbed-trials-completed` reach about 10 before doing anything else -- a fixed 10-second wait is not the same thing, and on a slow first paint it is not even a started run.",
         "Put the browser offline for 30 seconds: DevTools network throttling, the OS network toggle, or Playwright's context.setOffline(true).",
         "Go back online and let the run finish."
       ],
       "expectPage": {
         "status": "finished",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true }],
+        "trials": "trialsCompleted === trialsPlanned === 200, including the trials recorded while offline",
+        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "library" }],
         "notes": ["an `extension-pipe:` note about a failed flush during the offline window is expected, not a failure"]
       },
       "expectDashboard": [
@@ -547,17 +584,18 @@
       "driverActions": [
         "STOP. Confirm first that every recovery-dependent scenario's partial is already QUEUED -- `GET /api/queuestatus?experimentID=<id>` must list an entry for `abandoned-tab` and for `failed-final-submission`. Switching collection off before that DESTROYS them.",
         "Switch \"Accept new data\" OFF and wait for the \"Saved\" badge.",
-        "Open the URL and let it run.",
+        "Start the run as `defaults.startingARun` describes and let it run to the end.",
         "Switch \"Accept new data\" back ON afterwards if anything else follows."
       ],
       "expectPage": {
         "status": "failed",
-        "requests": [{ "label": "final-save", "status": 400, "ok": false, "error": "DATA_COLLECTION_NOT_ACTIVE" }],
+        "trials": "trialsCompleted === trialsPlanned === 5 -- the participant's run is unaffected; only the submission is refused",
+        "requests": [{ "label": "final-save", "status": 400, "ok": false, "error": "DATA_COLLECTION_NOT_ACTIVE", "source": "library" }],
         "notes": ["a `datapipe:` note that the session was not started; the page cannot see /api/session's status code itself"]
       },
       "expectDashboard": [
         "No row for this run in \"Sessions in progress\" at any point.",
-        "New error-panel entries with the code DATA_COLLECTION_NOT_ACTIVE (logged twice: once by /api/session, once by /api/data)."
+        "New rejections-panel entries with the code DATA_COLLECTION_NOT_ACTIVE (logged twice: once by /api/session, once by /api/data). The panel is hidden while anything is queued, and by this point in the order the recovery scenarios' partials usually are -- use GET /api/queuestatus and the page's own request statuses as the evidence instead."
       ],
       "expectStorage": { "files": 0, "countBy": "n/a", "naming": "n/a", "completeness": "nothing is written", "location": "n/a" },
       "timing": {

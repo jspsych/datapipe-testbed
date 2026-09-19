@@ -6,6 +6,27 @@
 
 export const DEFAULT_BASE = "https://datapipe-test.web.app";
 
+/**
+ * A DataPipe endpoint URL for a request this PAGE makes.
+ *
+ * No trailing slash, deliberately. `/api/data` is the path firebase.json
+ * rewrites to the function; `/api/data/` matches no rewrite, so Firebase
+ * Hosting answers it with a 308 redirect to the slashless form. That is a
+ * wasted round trip on every submission, and on an error path -- where the
+ * redirect target's response carries no CORS headers -- it is where `fetch`
+ * gives up with nothing more useful than "Failed to fetch".
+ *
+ * datapipe-client does NOT do this, and this repo cannot make it: `endpoint()`
+ * in packages/client/src/http.ts builds `${base}/api/${path}/` with the slash,
+ * so POST /api/session, POST /api/condition and the jsPsych page's final
+ * POST /api/data all still take the redirect. That is the whole reason a
+ * recorded request's url ends in a slash when `source` is "library" and does
+ * not when `source` is "page".
+ */
+export function endpointURL(base, path) {
+  return `${base}/api/${path}`;
+}
+
 function flag(value, fallback) {
   if (value === null) return fallback;
   return value === "1" || value === "true";
@@ -78,43 +99,87 @@ export function readParams() {
 // it can assert on, so every run also maintains `window.__testbed`:
 //
 //   { schema, page, params, status, startedAt, finishedAt,
+//     trialsCompleted, trialsPlanned,
 //     sessionId, condition, filenames, requests, notes }
 //
-// `status` is one of:
-//   running   -- the run is still going
+// SCHEMA 2. Schema 1 had no `ready` status and no trial counter, and a driver
+// written against it will find both missing on a cached copy of these pages --
+// read `schema` before relying on either.
+//
+// THE STATE MACHINE:
+//
+//   ready ──▶ running ──▶ finished | failed
+//     └───────────────▶ aborted
+//
+//   ready     -- the page loaded, its settings are valid, and it is waiting
+//                for the participant's first keypress. BOTH pages sit here on
+//                "Press any key to start", so this is the status a driver must
+//                see before it sends that key -- and `running` is what proves
+//                the key landed.
+//   running   -- the first trial has started. Trials are advancing.
 //   finished  -- the run reached its end AND the final submission was accepted
 //   failed    -- the run reached its end and the final submission was not
-//   aborted   -- the page stopped before running the trials (no experiment id,
-//                no condition assigned)
+//   aborted   -- the page stopped before any trial ran (no experiment id, no
+//                condition assigned). Reached from `ready`: a page with no
+//                experiment id publishes both in the same synchronous pass, so
+//                a driver never observes `ready` for that run.
+//
+// `failed` is reachable straight from `ready` too, in one case: the jsPsych
+// page's ?breaksave=1 pre-claim happens before the timeline starts, and a run
+// whose pre-claim was refused is meaningless, so it ends there rather than
+// running trials it would prove nothing with.
+//
+// Schema 1 set `running` at page load, before the first keypress. A driver
+// that read it as "trials are advancing" was wrong twice on 2026-09-19.
 //
 // A tab closed mid-run never leaves a terminal status, which is exactly what
 // the abandoned-session scenarios want to observe.
 //
+// `startedAt` is when the PAGE opened the result, not when the participant
+// started: the gap between them is however long the tab sat on "Press any key
+// to start". The ready ──▶ running transition is the participant's own start.
+//
+// TRIAL COUNTING. `trialsPlanned` is the `trials` parameter and nothing else,
+// and `trialsCompleted` reaches it on a clean finish, so
+// `trialsCompleted === trialsPlanned` is the whole of "it ran to the end".
+// Instruction screens are not counted on either page, even though the jsPsych
+// page's stored CSV holds a row for its one instruction trial -- the count is
+// about the task, and a driver polling for "half way" should not have to know
+// how many non-task screens a page happens to show first.
+//
 // Mirrored twice, because drivers differ in what they can do: `window.__testbed`
-// for anything that can evaluate JavaScript, and
-// `document.documentElement.dataset.testbedStatus` plus the JSON in
-// `#testbed-result` for anything that can only read the DOM.
+// for anything that can evaluate JavaScript, and the DOM for anything that
+// cannot -- `data-testbed-status`, `data-testbed-trials-completed` and
+// `data-testbed-trials-planned` on `<html>`, plus the full JSON in
+// `#testbed-result`. **The DOM is the primary interface.** A browser extension
+// evaluates JavaScript in an isolated world and may not see a page global at
+// all; `window.__testbed` is a convenience for same-world drivers such as
+// Playwright.
 //
 // WHAT IS DELIBERATELY MISSING. `requests` holds only the requests the PAGE
-// issues. The extension and datapipe-client make their own -- POST /api/session,
-// the jsPsych page's final POST /api/data, and the staging writes -- and the
-// page cannot see them. `fetch` is NOT wrapped to catch them. Staging talks to
-// the Realtime Database over its own transport rather than fetch, so a wrapper
-// would miss the bulk of them anyway; and the two it WOULD intercept are the
-// two most easily broken by touching them -- a gzip Blob body produced by
-// CompressionStream, and whatever the extension sends while the page is
-// unloading, where handing back a different promise can cost the browser its
-// keepalive guarantee. Runs say in `notes` which paths are invisible instead of
-// inventing entries for them; what those paths DO surface (callbacks, the
-// library warnings mirrored below, the final outcome) is recorded.
+// issues -- `source: "page"`. The extension and datapipe-client make their own
+// -- POST /api/session, the jsPsych page's final POST /api/data, and the
+// staging writes -- and the page cannot see them. `fetch` is NOT wrapped to
+// catch them. Staging talks to the Realtime Database over its own transport
+// rather than fetch, so a wrapper would miss the bulk of them anyway; and the
+// two it WOULD intercept are the two most easily broken by touching them -- a
+// gzip Blob body produced by CompressionStream, and whatever the extension
+// sends while the page is unloading, where handing back a different promise can
+// cost the browser its keepalive guarantee. Runs say in `notes` which paths are
+// invisible instead of inventing entries for them; what those paths DO surface
+// (callbacks, the library warnings mirrored below, the final outcome) is
+// recorded with `source: "library"`, and only `source: "page"` entries carry a
+// real `ms` -- the page cannot time a request it did not start.
 
 const result = {
-  schema: 1,
+  schema: 2,
   page: "",
   params: {},
-  status: "running",
+  status: "ready",
   startedAt: null,
   finishedAt: null,
+  trialsCompleted: 0,
+  trialsPlanned: 0,
   sessionId: null,
   condition: null,
   filenames: [],
@@ -126,7 +191,10 @@ const TERMINAL = ["finished", "failed", "aborted"];
 
 function publish() {
   window.__testbed = result;
-  document.documentElement.dataset.testbedStatus = result.status;
+  const dom = document.documentElement.dataset;
+  dom.testbedStatus = result.status;
+  dom.testbedTrialsCompleted = String(result.trialsCompleted);
+  dom.testbedTrialsPlanned = String(result.trialsPlanned);
   const el = document.getElementById("testbed-result");
   if (el) el.textContent = JSON.stringify(result, null, 2);
 }
@@ -135,6 +203,7 @@ function publish() {
 export function startResult(page, params) {
   result.page = page;
   result.params = { ...params };
+  result.trialsPlanned = params.trials;
   result.startedAt = new Date().toISOString();
   publish();
 }
@@ -145,8 +214,46 @@ export function setResultStatus(status) {
   publish();
 }
 
-/** One request the page made itself. `ms` is null when it was not timed. */
-export function recordRequest({ label, method = "POST", url = "", status = 0, ok, ms = null, error }) {
+/**
+ * The participant has started: the first trial is on screen.
+ *
+ * Only ever moves `ready` forward, so the pages can call it from a per-trial
+ * hook without having to know whether it is the first one -- and so a late
+ * call can never drag a finished run back to `running`.
+ */
+export function markRunning() {
+  if (result.status === "ready") setResultStatus("running");
+}
+
+/**
+ * How many of the task's trials have finished.
+ *
+ * Called once per trial, which is one DOM write per trial: cheap next to the
+ * trial itself, and the only thing a driver can poll to act "at trial N".
+ */
+export function setTrialsCompleted(completed) {
+  result.trialsCompleted = completed;
+  publish();
+}
+
+/**
+ * One request.
+ *
+ * `source` is "page" for a request this page issued through its own fetch, and
+ * "library" for one the extension or datapipe-client issued, which the page can
+ * only describe from a callback. `ms` is a real duration for "page" and null
+ * for "library" -- see the note above.
+ */
+export function recordRequest({
+  label,
+  method = "POST",
+  url = "",
+  status = 0,
+  ok,
+  ms = null,
+  source = "page",
+  error,
+}) {
   result.requests.push({
     label,
     method,
@@ -154,6 +261,7 @@ export function recordRequest({ label, method = "POST", url = "", status = 0, ok
     status,
     ok: ok === undefined ? status >= 200 && status < 300 : ok,
     ms,
+    source,
     ...(error === undefined ? {} : { error: String(error) }),
   });
   publish();

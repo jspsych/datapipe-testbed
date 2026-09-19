@@ -24,11 +24,14 @@ import {
   makeFilename,
   startResult,
   setResultStatus,
+  markRunning,
+  setTrialsCompleted,
   recordRequest,
   noteResult,
   setSessionId,
   setCondition,
   addFilename,
+  endpointURL,
 } from "../common.js";
 
 const params = readParams();
@@ -60,7 +63,7 @@ const target = document.getElementById("target");
  * contract needs no wrapper around fetch itself -- see common.js.
  */
 async function post(path, body, { compress = false, label = path } = {}) {
-  const url = `${params.base}/api/${path}/`;
+  const url = endpointURL(params.base, path);
   const json = JSON.stringify(body);
   const headers = { "Content-Type": "application/json" };
   let payload = json;
@@ -73,7 +76,7 @@ async function post(path, body, { compress = false, label = path } = {}) {
     headers["Content-Encoding"] = "gzip";
   }
 
-  log(`→ POST /api/${path}/${headers["Content-Encoding"] ? " (gzip)" : ""}`);
+  log(`→ POST /api/${path}${headers["Content-Encoding"] ? " (gzip)" : ""}`);
   const startedAt = performance.now();
   try {
     const response = await fetch(url, { method: "POST", headers, body: payload });
@@ -84,7 +87,7 @@ async function post(path, body, { compress = false, label = path } = {}) {
     } catch {
       parsed = text.slice(0, 200);
     }
-    log(`← ${response.status} /api/${path}/`, parsed);
+    log(`← ${response.status} /api/${path}`, parsed);
     recordRequest({
       label,
       url,
@@ -94,7 +97,7 @@ async function post(path, body, { compress = false, label = path } = {}) {
     });
     return { status: response.status, body: parsed };
   } catch (error) {
-    log(`← network error on /api/${path}/`, error);
+    log(`← network error on /api/${path}`, error);
     recordRequest({
       label,
       url,
@@ -223,15 +226,30 @@ async function main() {
       : "<p>Press <kbd>F</kbd> or <kbd>J</kbd> to match the letter shown.</p>") +
     "<p>Press any key to start.</p>";
   target.focus();
+  // Until this resolves the run is `ready`: loaded, valid, and waiting for a
+  // participant who has not pressed anything yet.
   await waitForKey();
+  markRunning();
 
   const rows = [];
+  let sessionIdReported = false;
   for (let i = 0; i < params.trials; i++) {
     const row = await runTrial(i);
     rows.push(row);
     // One line is the whole streaming integration for a page with no
     // framework. Safe to call whether or not the session started.
     session?.record(row);
+    setTrialsCompleted(rows.length);
+    // As early as it is true, rather than only at the flush below. `sessionId`
+    // is an empty string until the /api/session round trip lands, and a run
+    // that is going to be abandoned never reaches the flush -- so reporting it
+    // only at the end would mean never reporting it for exactly the runs where
+    // the staged copy matters most. Reading the public property costs nothing
+    // and starts no request of its own.
+    if (session && !sessionIdReported && session.sessionId) {
+      setSessionId(session.sessionId);
+      sessionIdReported = true;
+    }
   }
 
   target.innerHTML = "<p>Saving data…</p>";
