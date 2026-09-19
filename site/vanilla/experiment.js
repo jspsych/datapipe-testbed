@@ -22,23 +22,38 @@ import {
   describeRun,
   requireExperiment,
   makeFilename,
+  startResult,
+  setResultStatus,
+  recordRequest,
+  noteResult,
+  setSessionId,
+  setCondition,
+  addFilename,
 } from "../common.js";
 
 const params = readParams();
+startResult("vanilla", params);
 mirrorClientWarnings();
 describeRun(params, {
+  run: params.run || "—",
   trials: params.trials,
   format: params.format,
   stream: params.stream ? "on" : "off",
   condition: params.condition ? "on" : "off",
   compress: params.compress ? "on" : "off",
+  base64: params.base64,
   auto: params.auto ? "on" : "off",
 });
 
 const target = document.getElementById("target");
 
-/** POST JSON to a DataPipe endpoint; log and return {status, body}. */
-async function post(path, body, { compress = false } = {}) {
+/**
+ * POST JSON to a DataPipe endpoint; log, record, and return {status, body}.
+ *
+ * Every request this PAGE makes goes through here, which is why the result
+ * contract needs no wrapper around fetch itself -- see common.js.
+ */
+async function post(path, body, { compress = false, label = path } = {}) {
   const url = `${params.base}/api/${path}/`;
   const json = JSON.stringify(body);
   const headers = { "Content-Type": "application/json" };
@@ -53,6 +68,7 @@ async function post(path, body, { compress = false } = {}) {
   }
 
   log(`→ POST /api/${path}/${headers["Content-Encoding"] ? " (gzip)" : ""}`);
+  const startedAt = performance.now();
   try {
     const response = await fetch(url, { method: "POST", headers, body: payload });
     const text = await response.text();
@@ -63,9 +79,24 @@ async function post(path, body, { compress = false } = {}) {
       parsed = text.slice(0, 200);
     }
     log(`← ${response.status} /api/${path}/`, parsed);
+    recordRequest({
+      label,
+      url,
+      status: response.status,
+      ms: Math.round(performance.now() - startedAt),
+      error: response.ok ? undefined : parsed?.error ?? parsed,
+    });
     return { status: response.status, body: parsed };
   } catch (error) {
     log(`← network error on /api/${path}/`, error);
+    recordRequest({
+      label,
+      url,
+      status: 0,
+      ok: false,
+      ms: Math.round(performance.now() - startedAt),
+      error: `${error.name}: ${error.message}`,
+    });
     return { status: 0, body: null };
   }
 }
@@ -117,7 +148,8 @@ function waitForKey() {
 
 async function main() {
   const participantId = Math.random().toString(36).slice(2, 10);
-  const filename = makeFilename(participantId, params.format);
+  const filename = makeFilename(participantId, params.format, params.run);
+  addFilename(filename);
   log(`filename ${filename}`);
 
   DataPipe.setBaseURL(params.base);
@@ -129,10 +161,17 @@ async function main() {
     try {
       const condition = await DataPipe.getCondition({ experimentID: params.experiment });
       log(`condition assigned: ${condition}`);
+      setCondition(condition);
+      noteResult(
+        "POST /api/condition was made inside datapipe-client; per-request " +
+          "detail is unavailable. A non-null `condition` means it returned 200."
+      );
     } catch (error) {
       log("getCondition THREW -- the designed behaviour on failure", error);
       target.innerHTML =
         '<p class="notice">The experiment could not be started: no condition was assigned.</p>';
+      noteResult(`getCondition threw (${error.name}: ${error.message}); no trials were run`);
+      setResultStatus("aborted");
       return;
     }
   }
@@ -147,6 +186,13 @@ async function main() {
       ? "streaming ON -- trials are staged as they happen"
       : "streaming OFF -- one submission at the end"
   );
+  if (params.stream) {
+    noteResult(
+      "POST /api/session and the staging writes happen inside datapipe-client; " +
+        "per-request detail is unavailable. A non-null `sessionId` below means " +
+        "/api/session returned 200."
+    );
+  }
 
   target.innerHTML =
     `<p><strong>DataPipe test run.</strong> ${params.trials} trials.</p>` +
@@ -174,6 +220,7 @@ async function main() {
   // would leave DataPipe unable to match this file to the staged copy, which
   // it would then recover separately as a spurious .partial.json.
   await session?.flush();
+  if (session) setSessionId(session.sessionId);
 
   const { status } = await post(
     "data",
@@ -183,7 +230,7 @@ async function main() {
       data,
       ...(session?.sessionId ? { sessionId: session.sessionId } : {}),
     },
-    { compress: params.compress }
+    { compress: params.compress, label: "final-save" }
   );
 
   const ok = status === 201 || status === 202;
@@ -196,11 +243,48 @@ async function main() {
     ? `<p class="notice">Saved (${status}). Check the experiment's dashboard and your storage.</p>`
     : `<p class="notice">The submission was not accepted (${status || "no response"}). See the log.</p>`;
 
+  const resubmit = () =>
+    post(
+      "data",
+      { experimentID: params.experiment, filename, data },
+      { compress: params.compress, label: "resubmit" }
+    );
+
   const actions = document.getElementById("actions");
   actions.hidden = false;
-  document.getElementById("resubmit").addEventListener("click", () =>
-    post("data", { experimentID: params.experiment, filename, data }, { compress: params.compress })
-  );
+  document.getElementById("resubmit").addEventListener("click", resubmit);
+
+  // ?resubmit=1 presses that button for a driver. The duplicate is expected to
+  // be refused, so it never changes this run's status -- the status is about
+  // the submission, and that one already landed.
+  if (params.resubmit) await resubmit();
+
+  // ?base64=1|invalid exercises POST /api/base64, which now runs inside the
+  // same consolidated function as /api/data. Kept off the main submission
+  // path: a refusal here says nothing about whether the participant's data
+  // was stored, so it does not change the run's status either.
+  if (params.base64 !== "off") {
+    const b64Filename = `${filename.replace(/\.[^.]+$/, "")}.b64.txt`;
+    addFilename(b64Filename);
+    await post(
+      "base64",
+      {
+        experimentID: params.experiment,
+        filename: b64Filename,
+        data:
+          params.base64 === "valid"
+            ? btoa("testbed base64 payload\n")
+            : // Not base64 under any padding: is-base64 rejects it before the
+              // endpoint ever tries to decode.
+              "!!! not base64 !!!",
+      },
+      { label: "base64" }
+    );
+  }
+
+  // Last, so the status a driver polls for is only ever set once every request
+  // this run makes has been recorded.
+  setResultStatus(ok ? "finished" : "failed");
 }
 
 if (requireExperiment(params)) main();

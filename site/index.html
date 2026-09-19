@@ -24,6 +24,10 @@
           <input name="experiment" required autocomplete="off" spellcheck="false" placeholder="e.g. 3kQ9xZt1Lm0p" />
         </label>
         <label>
+          Run label <span class="hint">optional</span>
+          <input name="run" autocomplete="off" spellcheck="false" placeholder="e.g. clean-finish-0919" />
+        </label>
+        <label>
           DataPipe deployment
           <select name="base">
             <option value="https://datapipe-test.web.app">Test — datapipe-test.web.app</option>
@@ -54,6 +58,15 @@
           <legend>Plain JavaScript page</legend>
           <label class="check"><input name="condition" type="checkbox" /> Request a condition</label>
           <label class="check"><input name="compress" type="checkbox" checked /> Gzip the submission</label>
+          <label>
+            Base64 upload
+            <select name="base64">
+              <option value="0">Off</option>
+              <option value="1">Send a small valid file</option>
+              <option value="invalid">Send data that is not base64</option>
+            </select>
+            <span class="hint">Needs &ldquo;Accept base64 file uploads&rdquo; on the dashboard.</span>
+          </label>
         </fieldset>
       </form>
 
@@ -69,61 +82,13 @@
         <a href="https://datapipe-test.web.app">datapipe-test.web.app</a>), switch data collection on,
         and keep its dashboard open in another window while you run these.
       </p>
-      <ol class="scenarios">
-        <li>
-          <strong>Clean finish</strong> (jsPsych, save as you go). The dashboard shows
-          <em>1 session in progress</em> with a running time while you work; it disappears when you
-          finish, and exactly one file lands in storage.
-        </li>
-        <li>
-          <strong>Abandoned tab.</strong> Close the tab half-way. Within seconds the row reads
-          <em>Connection lost — may resume</em>; after 10 minutes, <em>Stopped — being
-          recovered</em>; within about 15 minutes a <code>.partial.json</code> holding the
-          completed trials appears in storage and the row is gone.
-        </li>
-        <li>
-          <strong>Brief dropout.</strong> In DevTools, set the network to Offline for about 30
-          seconds, then back online, and finish. The row flips to <em>Connection lost</em> and back;
-          you get one complete file and no partial.
-        </li>
-        <li>
-          <strong>Failed final submission</strong> (tick <em>Make the final submission fail</em>).
-          The page claims the filename first, so DataPipe refuses the real submission as a
-          duplicate. The log shows the save failed; the staged trials come back as a
-          <code>.partial.json</code> within about 15 minutes, not 24 hours. Note the partial
-          carries a hash suffix, because the plain filename is taken.
-        </li>
-        <li>
-          <strong>Ended early</strong> (set <em>Abort at trial</em> to something below your trial
-          count). The experiment stops as a failed attention check would. <strong>The data is
-          still submitted</strong> — this is the behaviour a save trial never had, because an
-          aborted timeline never reaches one.
-        </li>
-        <li>
-          <strong>Baseline without streaming</strong> (untick <em>Save as you go</em>). One file,
-          and no in-progress row at any point.
-        </li>
-        <li>
-          <strong>Plain JavaScript, streaming.</strong> The same recovery behaviour with no
-          framework at all — an in-progress row while it runs, one file at the end. This was
-          impossible until the staging client moved out of the jsPsych plugin.
-        </li>
-        <li>
-          <strong>Plain JavaScript, conditions.</strong> With <em>Request a condition</em> ticked,
-          the log shows the assigned number. Switch condition assignment off on the dashboard and
-          run again: the page reports that <code>getCondition</code> threw and refuses to start,
-          rather than running an unassigned participant.
-        </li>
-        <li>
-          <strong>Duplicate rejection.</strong> On the plain JavaScript page, <em>Send the same
-          file again</em> is refused.
-        </li>
-        <li>
-          <strong>Closed experiment.</strong> Switch data collection off and run the jsPsych test:
-          the log reports that no session was started and the final submission is refused with
-          <code>DATA_COLLECTION_NOT_ACTIVE</code>.
-        </li>
-      </ol>
+      <ol class="scenarios" id="scenarios"></ol>
+      <p class="hint" id="scenarios-status">Loading the scenario list…</p>
+      <p class="hint">
+        This list is rendered from <a href="./scenarios.json">scenarios.json</a>, which is also what
+        the <code>e2e-testbed</code> skill in the DataPipe repo drives. Edit the manifest, not this
+        page.
+      </p>
       <p class="hint">
         Tests <code>@jspsych/extension-pipe</code> 0.2.0 and <code>datapipe-client</code> 0.1.0,
         both loaded from the CDN, pinned.
@@ -159,18 +124,21 @@
           auto: f.auto.checked ? "1" : "0",
         });
         common.set("stream", f.stream.checked ? "1" : "0");
+        if (f.run.value.trim()) common.set("run", f.run.value.trim());
         const jspsych = new URLSearchParams(common);
         jspsych.set("breaksave", f.breaksave.checked ? "1" : "0");
         jspsych.set("abort", f.abort.value || "0");
         const vanilla = new URLSearchParams(common);
         vanilla.set("condition", f.condition.checked ? "1" : "0");
         vanilla.set("compress", f.compress.checked ? "1" : "0");
+        if (f.base64.value !== "0") vanilla.set("base64", f.base64.value);
         links.jspsych.href = `./jspsych/?${jspsych}`;
         links.vanilla.href = `./vanilla/?${vanilla}`;
 
         const ready = f.experiment.value.trim().length > 0;
         for (const a of Object.values(links)) a.setAttribute("aria-disabled", String(!ready));
         hint.hidden = ready;
+        updateScenarioLinks();
 
         try {
           const values = {};
@@ -190,6 +158,75 @@
         });
       }
       form.addEventListener("input", update);
+
+      // The "What to check" list is rendered from scenarios.json rather than
+      // written twice. The manifest is what a driver reads, and a list that
+      // only a human reads drifts away from it within one release.
+      //
+      // This page is served over HTTP (GitHub Pages, or a local static server);
+      // opened straight off the filesystem the fetch below is blocked and the
+      // list is replaced by a link to the manifest, which is the honest
+      // failure -- the pages need a deployment to talk to anyway.
+      const listEl = document.getElementById("scenarios");
+      const statusEl = document.getElementById("scenarios-status");
+      let scenarios = [];
+      let pages = { jspsych: "jspsych/", vanilla: "vanilla/" };
+
+      function escapeHtml(text) {
+        return text.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+      }
+
+      // Backticks mean in the manifest what they mean in the README.
+      function prose(text) {
+        return escapeHtml(text).replace(/`([^`]+)`/g, "<code>$1</code>");
+      }
+
+      function scenarioHref(scenario) {
+        const f = form.elements;
+        const q = new URLSearchParams({
+          experiment: f.experiment.value.trim(),
+          base: f.base.value,
+          run: f.run.value.trim() || scenario.id,
+          ...scenario.params,
+        });
+        return `./${pages[scenario.page] ?? `${scenario.page}/`}?${q}`;
+      }
+
+      function updateScenarioLinks() {
+        const ready = form.elements.experiment.value.trim().length > 0;
+        for (const a of listEl.querySelectorAll("a[data-scenario]")) {
+          const scenario = scenarios.find((s) => s.id === a.dataset.scenario);
+          if (scenario) a.href = scenarioHref(scenario);
+          a.setAttribute("aria-disabled", String(!ready));
+        }
+      }
+
+      fetch("./scenarios.json")
+        .then((response) => (response.ok ? response.json() : Promise.reject(response.status)))
+        .then((manifest) => {
+          scenarios = manifest.scenarios ?? [];
+          pages = manifest.defaults?.pages ?? pages;
+          listEl.innerHTML = scenarios
+            .map(
+              (s) => `<li>
+                <strong>${escapeHtml(s.title)}.</strong> ${prose(s.description)}
+                <div class="scenario-meta">
+                  <a data-scenario="${escapeHtml(s.id)}" href="#">Open this test</a>
+                  <span class="tag">${escapeHtml(s.page)}</span>
+                  <span class="tag">${escapeHtml(s.automation)}</span>
+                  ${s.deferredCheck ? '<span class="tag">deferred storage check</span>' : ""}
+                </div>
+              </li>`
+            )
+            .join("");
+          statusEl.hidden = true;
+          updateScenarioLinks();
+        })
+        .catch(() => {
+          statusEl.innerHTML =
+            'The scenario list could not be loaded. Read <a href="./scenarios.json">scenarios.json</a> directly.';
+        });
+
       update();
     </script>
   </body>

@@ -67,3 +67,13 @@ legend { font-weight: 600; font-size: 0.95rem; padding: 0 0.25rem; }
 .log { font-family: var(--mono); font-size: 0.78rem; max-height: 30vh; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .log-line { padding: 1px 0; }
 .log-warn { color: var(--warn); }
+/* Collapsed by default, so the JSON never competes with the log for a phone
+   screen; opened, it is capped the same way the log is. */
+.result-panel { margin-top: 0.6rem; }
+.result-panel summary { color: var(--muted); font-size: 0.8rem; cursor: pointer; }
+.result-panel pre { font-family: var(--mono); font-size: 0.72rem; max-height: 30vh; overflow: auto; margin: 0.4rem 0 0; }
+
+/* Home page: the scenario list, rendered from scenarios.json */
+.scenarios .scenario-meta { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; margin-top: 0.2rem; font-size: 0.85rem; }
+.scenario-meta a[aria-disabled="true"] { color: var(--muted); }
+.tag { font-family: var(--mono); font-size: 0.75rem; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 0 0.35em; }
