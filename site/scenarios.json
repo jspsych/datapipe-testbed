@@ -44,7 +44,7 @@
     {
       "id": "metadata-error-is-recovered-later",
       "summary": "A submission refused with 400 METADATA_ERROR keeps its pending Cloud Storage copy on purpose (api-data.ts: \"scheduled-pending-recovery salvages it later instead of losing it outright\"). METADATA_ERROR means metadata generation failed, not that the participant's data was refused, and the policy is never to destroy raw data over it.",
-      "consequence": "Within the next pending-recovery slot (:00/:15/:30/:45, for entries older than ~15 minutes) a queue entry appears for that filename with failureReason \"Recovered from interrupted upload (server restart or memory limit)\". EXPECT it. Do not flag it. The wording is misleading for this case -- no server restarted.",
+      "consequence": "Within the next pending-recovery slot (:00/:15/:30/:45, for entries older than ~15 minutes) a queue entry appears for that filename. EXPECT it. Do not flag it. Its failureReason is \"Kept after a metadata failure (raw data stored without Psych-DS files)\" on a deployment that has datapipe #262 (api-data.ts labels the pending copy, scheduled-pending-recovery.ts reads the label), and the generic \"Recovered from interrupted upload (server restart or memory limit)\" on one that does not -- accept either, and say which you saw. With #262 the dashboard's queue panel shows the entry as \"Waiting to be stored\", not \"Retrying\": it has not failed.",
       "observed": "3 such entries at 17:15 UTC, 2026-09-19, one per METADATA_ERROR refusal."
     },
     {
