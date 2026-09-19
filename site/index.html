@@ -67,6 +67,9 @@
             </select>
             <span class="hint">Needs &ldquo;Accept base64 file uploads&rdquo; on the dashboard.</span>
           </label>
+          <label class="check">
+            <input name="failvalidation" type="checkbox" /> Omit <code>trial_type</code>, so validation refuses the data
+          </label>
         </fieldset>
       </form>
 
@@ -137,6 +140,7 @@
         vanilla.set("condition", f.condition.checked ? "1" : "0");
         vanilla.set("compress", f.compress.checked ? "1" : "0");
         if (f.base64.value !== "0") vanilla.set("base64", f.base64.value);
+        if (f.failvalidation.checked) vanilla.set("failvalidation", "1");
         links.jspsych.href = `./jspsych/?${jspsych}`;
         links.vanilla.href = `./vanilla/?${vanilla}`;
 

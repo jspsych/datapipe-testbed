@@ -15,7 +15,7 @@
   "preconditions": {
     "experiment": "A fresh experiment on the deployment under test, storing to Google Drive (new experiments cannot choose OSF). Record its ID.",
     "dataCollection": "\"Accept new data\" ON, except where a scenario says otherwise.",
-    "validation": "A NEW EXPERIMENT SHIPS WITH VALIDATION ON and one required field, `trial_type` (create-experiment.ts: `useValidation ?? true`, `requiredFields ?? [\"trial_type\"]`). The plain-JavaScript page emits `trial_index, task, stimulus, response, rt, correct` and has no `trial_type`, so EVERY vanilla scenario is refused with 400 INVALID_DATA until you either remove the `trial_type` chip or switch \"Check submissions before storing them\" off. Do this during setup.",
+    "validation": "LEAVE THE DEFAULTS ALONE -- no setup needed. A new experiment ships with validation ON and one required field, `trial_type` (create-experiment.ts: `useValidation ?? true`, `requiredFields ?? [\"trial_type\"]`). Both pages satisfy it: jsPsych writes `trial_type` itself from each plugin's `info.name`, and the plain-JavaScript page puts `trial_type: \"letter-keyboard-response\"` on every row. If a scenario is unexpectedly refused with 400 INVALID_DATA, this is where to look. `validation-failure` is the one scenario that omits the column on purpose.",
     "metadata": "\"Generate Psych-DS metadata\" LOCKS PERMANENTLY once the experiment has data (\"Locked because this experiment has collected data\"). Decide before the first submission. With it on, raw files move from the folder root to data/raw/, derived CSVs appear beside them, and a submission that is not parseable CSV/JSON is refused with METADATA_ERROR.",
     "conditions": "\"Assign conditions in sequence\" OFF by default; the condition scenarios switch it.",
     "base64": "\"Accept base64 file uploads\" OFF by default; the base64 scenarios switch it."
@@ -160,7 +160,6 @@
       "page": "vanilla",
       "params": { "trials": "20", "format": "csv", "auto": "1", "stream": "1", "compress": "1" },
       "driverActions": [
-        "Validation must be off, or `trial_type` removed from the required fields -- see preconditions. Otherwise this is refused with 400 INVALID_DATA.",
         "Open the URL, click the page body, then send a single `f` keypress in a SEPARATE call. Assert the first trial appeared before waiting."
       ],
       "expectPage": {
@@ -185,7 +184,7 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "2026-09-19 with trials=8 and condition=1: gzipped POST /api/data returned 201, file in data/raw/. PASS, after the `trial_type` required field was removed."
+      "observed": "2026-09-19 with trials=8 and condition=1: gzipped POST /api/data returned 201, file in data/raw/. PASS -- but that run had to remove the `trial_type` required field by hand first, which is why the page now emits the column."
     },
     {
       "id": "vanilla-uncompressed",
@@ -249,8 +248,44 @@
       "observed": "2026-09-19 via the button (the published page predated `resubmit`): 400 FILE_EXISTS. PASS."
     },
     {
-      "id": "abandoned-tab",
+      "id": "validation-failure",
       "order": 7,
+      "title": "Data that fails validation",
+      "description": "The plain JavaScript page leaves `trial_type` off every row, so the submission fails the validation rules a new experiment ships with. DataPipe refuses it with `INVALID_DATA` and stores nothing — and, unlike a metadata failure, keeps no copy to recover later.",
+      "page": "vanilla",
+      "params": { "trials": "5", "format": "csv", "auto": "1", "stream": "0", "failvalidation": "1" },
+      "driverActions": [
+        "Nothing on the dashboard. This scenario exercises the DEFAULT validation settings, so do not change them.",
+        "Open the URL, click the body, then send `f` in a separate call.",
+        "`stream=0` on purpose: api-data.ts deliberately leaves staged trials alone on INVALID_DATA, so a streamed run here would leave a recoverable session behind and turn this into a deferred scenario."
+      ],
+      "expectPage": {
+        "status": "failed",
+        "requests": [{ "label": "final-save", "status": 400, "ok": false, "error": "INVALID_DATA" }],
+        "notes": ["a note reading \"failvalidation: `trial_type` is omitted from every row on purpose\""]
+      },
+      "expectDashboard": [
+        "A new error-panel entry with the code INVALID_DATA.",
+        "No queue entry, now or later."
+      ],
+      "expectStorage": {
+        "files": 0,
+        "countBy": "n/a",
+        "naming": "n/a",
+        "completeness": "nothing is written, and nothing appears later either: the useValidation block in api-data.ts runs BEFORE persistPending, so no pending copy exists for the recovery sweep to find. That is the contrast with a METADATA_ERROR refusal, which does leave one -- see knownIssues.",
+        "location": "n/a"
+      },
+      "timing": {
+        "pageRun": "~3 s after the first keypress",
+        "checkDashboardAfter": "after the run",
+        "checkStorageAfter": "n/a -- but re-check at the next :00/:15/:30/:45 slot that NOTHING was queued"
+      },
+      "automation": "full",
+      "observed": "not run; code-derived. api-data.ts (the useValidation block and its position relative to persistPending), validate-csv.ts and validate-json.ts: both validators check `requiredFields` against the CSV header row / the union of JSON object keys, and with allowCSV and allowJSON both on by default a CSV missing the column fails each in turn."
+    },
+    {
+      "id": "abandoned-tab",
+      "order": 8,
       "title": "Abandoned tab",
       "description": "Close the tab half-way. Within seconds the dashboard row reads `Connection lost — may resume`; after 10 minutes, `Stopped — being recovered`; the sweep then queues the staged trials, and the `.partial.json` reaches storage about an hour later, not within 15 minutes.",
       "page": "jspsych",
@@ -292,7 +327,7 @@
     },
     {
       "id": "failed-final-submission",
-      "order": 8,
+      "order": 9,
       "title": "Failed final submission",
       "description": "The page claims the filename first, so DataPipe refuses the real submission as a duplicate. The log shows the save failed, and the staged trials come back later as a `.partial.json` under a hash-suffixed name.",
       "page": "jspsych",
@@ -333,7 +368,7 @@
     },
     {
       "id": "vanilla-condition",
-      "order": 9,
+      "order": 10,
       "title": "Plain JavaScript, conditions",
       "description": "With `Request a condition` ticked, the log shows the assigned number and the run proceeds normally.",
       "page": "vanilla",
@@ -368,7 +403,7 @@
     },
     {
       "id": "vanilla-condition-off",
-      "order": 10,
+      "order": 11,
       "title": "Plain JavaScript, condition assignment switched off",
       "description": "Switch condition assignment off on the dashboard and run again: the page reports that `getCondition` threw and refuses to start, rather than running an unassigned participant.",
       "page": "vanilla",
@@ -396,7 +431,7 @@
     },
     {
       "id": "base64-valid",
-      "order": 11,
+      "order": 12,
       "title": "Base64 upload",
       "description": "The plain JavaScript page sends a small valid base64 payload to `/api/base64`, which now runs inside the same consolidated function as `/api/data`. The decoded file lands alongside the run's data file.",
       "page": "vanilla",
@@ -431,7 +466,7 @@
     },
     {
       "id": "base64-invalid",
-      "order": 12,
+      "order": 13,
       "title": "Base64 upload, invalid payload",
       "description": "The same path with something that is not base64 at all. The endpoint refuses it with `INVALID_BASE64_DATA` and the run's own data file is unaffected.",
       "page": "vanilla",
@@ -465,7 +500,7 @@
     },
     {
       "id": "brief-dropout",
-      "order": 13,
+      "order": 14,
       "title": "Brief dropout",
       "description": "Go offline for about 30 seconds mid-run, then back online, and finish. The dashboard row flips to `Connection lost — may resume` and back to `In progress`; you get one complete file and no partial.",
       "page": "jspsych",
@@ -504,7 +539,7 @@
     },
     {
       "id": "closed-experiment",
-      "order": 14,
+      "order": 15,
       "title": "Closed experiment",
       "description": "Switch data collection off and run the jsPsych test: no session is started and the final submission is refused with `DATA_COLLECTION_NOT_ACTIVE`.",
       "page": "jspsych",

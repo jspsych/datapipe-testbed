@@ -46,10 +46,34 @@ Every setting is a URL parameter, so a test is a link you can share:
 | `compress` | plain JS | `1` | Gzip the submission |
 | `base64` | plain JS | `0` | `1` sends a valid payload to `/api/base64`; `invalid` sends one that is not base64 |
 | `resubmit` | plain JS | `0` | `1` presses *Send the same file again* without waiting for a click |
+| `failvalidation` | plain JS | `0` | `1` omits `trial_type`, so the data fails validation |
 
 Nothing here is secret: DataPipe experiment IDs are public by design, and none
 is committed — they come from the URL. Do point tests at a *test* experiment:
 they send real data to real storage.
+
+## What the data looks like
+
+Both pages run the same task — a letter, `F` or `J`, answered with a keypress —
+and both produce one row per trial:
+
+```
+trial_type,trial_index,task,stimulus,response,rt,correct
+letter-keyboard-response,0,testbed-letter,F,f,412,true
+```
+
+`trial_type` is first because it is the field **DataPipe itself requires by
+default**: a new experiment is created with validation on and
+`requiredFields: ["trial_type"]`. jsPsych fills it in from each plugin's
+`info.name`; the plain-JavaScript page has no plugins, so it writes
+`letter-keyboard-response` — a description of the trial, not a claim to be the
+jsPsych plugin of a similar name.
+
+The point is that **neither page needs a dashboard setting changed before it
+can send anything**. A testbed that requires validation to be switched off
+before its first submission is testing a configuration no new experiment has.
+`?failvalidation=1` drops the column deliberately, which is the only way to
+reach `INVALID_DATA` without editing the experiment.
 
 ## Driving it
 
@@ -140,11 +164,9 @@ attempt is an hour later, so the file appears in storage roughly 65–75 minutes
 after the participant dropped out. `deferredNote` says what to look for and
 when.
 
-`preconditions` and `knownIssues` are worth reading before the first run. Two
-in particular: a new experiment ships with validation on and a required
-`trial_type` field that the plain-JavaScript page does not emit, and on Google
-Drive a `.psychds-ignore` file accumulates per upload — so count files by
-filename stem, never by folder total.
+`preconditions` and `knownIssues` are worth reading before the first run. The
+one that bites hardest: on Google Drive a `.psychds-ignore` file accumulates
+per upload, so count files by filename stem, never by folder total.
 
 The runbook that drives all of this lives in the DataPipe repo, at
 `.claude/skills/e2e-testbed/SKILL.md`.

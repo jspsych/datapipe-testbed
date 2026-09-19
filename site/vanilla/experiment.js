@@ -42,8 +42,14 @@ describeRun(params, {
   condition: params.condition ? "on" : "off",
   compress: params.compress ? "on" : "off",
   base64: params.base64,
+  failvalidation: params.failvalidation ? "ON" : "off",
   auto: params.auto ? "on" : "off",
 });
+
+if (params.failvalidation) {
+  log("failvalidation: rows will carry no trial_type, so validation should refuse them");
+  noteResult("failvalidation: `trial_type` is omitted from every row on purpose");
+}
 
 const target = document.getElementById("target");
 
@@ -101,6 +107,19 @@ async function post(path, body, { compress = false, label = path } = {}) {
   }
 }
 
+// What this page's one trial type is. It goes on every row under the name
+// `trial_type`, because that is the field a NEW DataPipe experiment requires by
+// default (create-experiment.ts: `requiredFields ?? ["trial_type"]`) -- so
+// without it the plain-JavaScript page's very first submission is refused with
+// INVALID_DATA, and a testbed that needs a dashboard setting changed before it
+// can send anything is testing the wrong thing.
+//
+// jsPsych fills this in itself, from the plugin's `info.name`. There is no
+// plugin here, so the name is written out: a letter shown, a keyboard response
+// taken. It deliberately does NOT claim to be `html-keyboard-response` -- that
+// is a jsPsych plugin and this page has no jsPsych in it.
+const TRIAL_TYPE = "letter-keyboard-response";
+
 /** One trial: show a letter, wait for F or J (or time out in auto mode). */
 function runTrial(index) {
   return new Promise((resolve) => {
@@ -113,6 +132,9 @@ function runTrial(index) {
       window.removeEventListener("keydown", onKey);
       if (timer) clearTimeout(timer);
       resolve({
+        // First, as the column DataPipe validates on. ?failvalidation=1 drops
+        // it, which is the whole of that scenario.
+        ...(params.failvalidation ? {} : { trial_type: TRIAL_TYPE }),
         trial_index: index,
         task: "testbed-letter",
         stimulus: letter,

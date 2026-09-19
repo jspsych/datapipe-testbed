@@ -58,6 +58,10 @@ export function readParams() {
     // Plain-JS page: press "Send the same file again" without waiting for a
     // human, so duplicate rejection is a scenario a driver can run unattended.
     resubmit: flag(q.get("resubmit"), false),
+    // Plain-JS page: leave `trial_type` off every row, so the submission fails
+    // the validation rules a new experiment ships with. The only way to reach
+    // INVALID_DATA without changing a dashboard setting first.
+    failvalidation: flag(q.get("failvalidation"), false),
     // A free-form id for ONE run. It is echoed into the result contract below
     // and into the filename, which is what lets a driver tie a dashboard row
     // and a file in storage back to the scenario that produced them.
