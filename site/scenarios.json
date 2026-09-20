@@ -1,8 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-09-20",
   "about": "The end-to-end scenarios for a DataPipe deployment, as data rather than prose. site/index.html renders its \"What to check\" list from this file, and the e2e-testbed skill in the datapipe repo drives it. Add `experiment`, `base` and `run` to each scenario's params to build a URL.",
-  "observed": "Parts of this manifest were checked against https://datapipe-test.web.app at commit a10464c on 2026-09-19, again at commit e1a6862 (datapipe #262 live from 22:33Z) during the 22:26-23:08Z run that first drove the result contract, and again at commit 0077cab during a 2026-09-20 00:00-00:35Z run against schema 2 on both pages. Each scenario carries an `observed` field saying what those runs actually saw. Everything else is derived from the handler code and is still unconfirmed against a live deployment.",
   "defaults": {
     "base": "https://datapipe-test.web.app",
     "pages": {
@@ -10,9 +8,10 @@
       "vanilla": "vanilla/"
     },
     "runParam": "run",
+    "verifiedField": "Each scenario, and each `knownIssues` entry (folded into its `summary`/`consequence`), carries a `verified` marker instead of a run log: `\"live\"` means its page/dashboard/storage expectations have been confirmed against a live deployment; `\"code\"` means they are derived from the handler and component source only, not yet confirmed live; `\"partial\"` means part is confirmed and part is not, with `verifiedNote` saying which part.",
     "resultContract": "Result contract SCHEMA 2. Read `document.documentElement.dataset.testbedSchema`, `.testbedStatus`, `.testbedTrialsCompleted` and `.testbedTrialsPlanned` (the `data-testbed-schema`, `data-testbed-status`, `data-testbed-trials-completed` and `data-testbed-trials-planned` attributes on `<html>`), plus the JSON text of `#testbed-result`, from the DOM. `window.__testbed` holds the same object, but a browser extension evaluating JavaScript in an isolated world may not see a page global -- prefer the DOM. Read `data-testbed-schema` FIRST -- a one-line DOM check, no JSON parse needed -- and fall back to the JSON's `schema` field if that attribute is absent, then to schema-1 behaviour if neither is present: a cached schema-1 page has no `ready` status (it reads `running` from load), no trial counter and no `source` on its requests, and every expectation below that names one of those has to fall back to the schema-1 behaviour.",
     "statusMachine": "ready -> running -> finished | failed, and ready -> aborted. `ready` means loaded, settings valid, waiting for the participant's first keypress -- BOTH pages sit there on \"Press any key to start\". `running` means the first trial has started. `failed` is also reachable straight from `ready` when the jsPsych page's breaksave pre-claim is refused.",
-    "startingARun": "Both pages wait for a real keypress, and the first one after a navigation is usually swallowed (OBSERVED twice on 2026-09-19; `space` never worked, `f` did). Wait for `data-testbed-status` to read `ready`; then, in SEPARATE tool calls, click the page body and send ONE `f`; then verify. VERIFY MEANS `data-testbed-status` HAS MOVED FROM `ready` TO `running` -- while it still reads `ready` the key did not land, so click and send again. `f` is also a valid trial response, so an extra keypress is harmless.",
+    "startingARun": "Both pages wait for a real keypress, and the first one after a navigation is often swallowed -- `space` does not work, `f` does. Wait for `data-testbed-status` to read `ready`; then, in SEPARATE tool calls, click the page body and send ONE `f`; then verify. VERIFY MEANS `data-testbed-status` HAS MOVED FROM `ready` TO `running` -- while it still reads `ready` the key did not land, so click and send again. `f` is also a valid trial response, so an extra keypress is harmless.",
     "trialCounter": "`trialsPlanned` is the `trials` parameter; `trialsCompleted` counts only the task's own trials and reaches `trialsPlanned` exactly on a clean finish. Instruction screens are NOT counted on either page, so the jsPsych page's stored CSV holds one row more than `trialsCompleted` (its instruction trial). Poll `data-testbed-trials-completed` to act at a given trial rather than timing it off the clock."
   },
   "preconditions": {
@@ -25,42 +24,32 @@
   },
   "ordering": {
     "rule": "Run scenarios in `order`. A scenario that changes experiment-level state (`mutatesExperimentState`) affects every scenario after it, and one with `mustRunLast` must not run before the scenarios in its `runAfter` have met their `runAfterCondition`.",
-    "why": "Observed 2026-09-19: switching \"Accept new data\" off for `closed-experiment` while an earlier session was still staged DESTROYED that session's recovery. The staging sweep re-checks the experiment before promoting anything (scheduled-staging-sweep.ts, \"THE SECOND DOOR\") and discards staged trials outright when `active` is false. The run then looked like a recovery bug that does not exist.",
+    "why": "Switching \"Accept new data\" off for `closed-experiment` while an earlier session is still staged DESTROYS that session's recovery. The staging sweep re-checks the experiment before promoting anything (scheduled-staging-sweep.ts, \"THE SECOND DOOR\") and discards staged trials outright when `active` is false -- which can look like a recovery bug that does not exist.",
     "alternative": "Run `closed-experiment` on a second throwaway experiment instead, and the ordering constraint goes away."
   },
   "timingFacts": {
     "abandonGraceMinutes": 10,
     "sweepCron": "*/5 (staging sweep and upload retry every tick; pending recovery on the :00/:15/:30/:45 slots; mail retry on :00/:10/...)",
-    "recoveredPartialFirstAttemptMinutes": 60,
-    "observedAbandonToQueueMinutes": 12,
-    "note": "A recovered session is QUEUED by the sweep, not uploaded by it. queue-upload.ts gives an entry with no provider error code nextRetryAt = now + 1 hour, and the retry worker runs on */5 -- so a partial file reaches storage roughly 65-75 minutes after the participant dropped out, not 15. For that hour the dashboard's queue panel lists it as \"Waiting to be stored\" (datapipe #262; it is no longer described as a failed upload), with retryCount 0 and lastAttemptAt null. That is expected, not a bug.",
-    "observedAbandonToQueue": "Measured twice on 2026-09-19: ~12 min on the 17:00Z run, and 10 min 7 s on the 22:30Z one -- tab closed 22:30:06, queue entry createdAt 22:40:13, nextRetryAt 23:40:13 (exactly +1 h). Use 10-14 min as the window to start looking.",
+    "recoveredPartialFirstAttemptMinutes": 0,
+    "note": "A recovered session is QUEUED by the sweep, not uploaded by it -- but on the current build queue-upload.ts gives that entry nextRetryAt = now, and the same sweep invocation runs the staging sweep before the upload retry pass, so the SAME tick that queues it also delivers it. A recovered session is typically queued, and its partial reaches storage, about ten to fifteen minutes after the tab closes (the abandonment grace period plus the next 5-minute sweep) -- the queue entry itself is usually only visible for the seconds between those two passes, not an hour. A deployment running an OLDER BUILD still gives that entry nextRetryAt = createdAt + 60 min, so storage lands roughly 65-75 minutes after the dropout and the queue panel shows \"Waiting to be stored\" for that whole hour, retryCount 0, lastAttemptAt null. Compare the entry's nextRetryAt to its createdAt in GET /api/queuestatus to tell which build is live: equal (or already past) means the current build; createdAt + ~60 min means the older one. Either way this is expected, not a bug.",
     "whenTheClockStarts": "For an abandoned tab, at the socket drop -- an open tab counts as live. For a refused final submission, datapipe-client stamps the session abandoned IMMEDIATELY (packages/client/src/session.ts, `close({submitted:false})`), so the clock starts at the refusal; whether @jspsych/extension-pipe does the same is not verified, so close the tab promptly afterwards either way. The 24-hour `expiresAt` is the backstop behind both.",
-    "observedPageRates": "jsPsych page with auto=1: 1.1-1.7 s per trial (60 trials ran in ~66 s on 2026-09-19, i.e. the fast end). Vanilla page with auto=1: 400 ms per trial. A /api/data call that writes to Drive: 2-4.5 s. Size any \"act at trial N\" step off the FAST end, and add the cost of the driver's own polling -- a browser-extension tool call costs a few seconds, so a 5 s poll cadence can overshoot by 20-30 s."
+    "observedPageRates": "jsPsych page with auto=1: 1.1-1.7 s per trial. Vanilla page with auto=1: 400 ms per trial. A /api/data call that writes to Drive: 2-4.5 s. Size any \"act at trial N\" step off the FAST end, and add the cost of the driver's own polling -- a browser-extension tool call costs a few seconds, so a 5 s poll cadence can overshoot by 20-30 s."
   },
   "knownIssues": [
     {
       "id": "psychds-ignore-duplicates",
-      "summary": "On Google Drive, one `.psychds-ignore` file accumulates per successful upload rather than one per experiment. metadata-derived-upload.ts dedupes on the provider's NAME_CONFLICT, and Drive permits duplicate names, so the dedupe never fires.",
-      "consequence": "Never assert on the TOTAL number of files in the folder. Count the files matching this run's filename stem instead.",
-      "observed": "5 copies after 5 uploads, 2026-09-19. A pre-existing DataPipe bug, not a testbed one."
+      "summary": "On the current build, `.psychds-ignore` is claimed once per experiment (a `psychdsIgnoreWrittenAt` field on the experiment document, psychds-ignore-claim.ts) and written at most once: the first submission that finds the claim unset wins it and writes the file; every later submission drops it before the request reaches the provider. An experiment that already held one or more copies from before this claim existed still gets exactly ONE more on its next submission, then stops for good. A claim the transaction cannot decide (contention on a hot experiment document) writes the file anyway rather than failing the submission, so an occasional extra copy is still possible and harmless.",
+      "consequence": "Never assert on the TOTAL number of files in the folder. Count the files matching this scenario's filename stem instead -- an experiment can still carry more than one `.psychds-ignore` from before the claim existed, or rarely one extra from an undecided claim. A deployment running an OLDER BUILD has no claim at all and still writes one copy per successful upload, so N uploads there leave N copies; that older behaviour is a pre-existing DataPipe bug, not a testbed one."
     },
     {
       "id": "metadata-error-is-recovered-later",
       "summary": "A submission refused with 400 METADATA_ERROR keeps its pending Cloud Storage copy on purpose (api-data.ts: \"scheduled-pending-recovery salvages it later instead of losing it outright\"). METADATA_ERROR means metadata generation failed, not that the participant's data was refused, and the policy is never to destroy raw data over it.",
-      "consequence": "Within the next pending-recovery slot (:00/:15/:30/:45, for entries older than ~15 minutes) a queue entry appears for that filename. EXPECT it. Do not flag it. Its failureReason is \"Kept after a metadata failure (raw data stored without Psych-DS files)\" on a deployment that has datapipe #262 (api-data.ts labels the pending copy, scheduled-pending-recovery.ts reads the label), and the generic \"Recovered from interrupted upload (server restart or memory limit)\" on one that does not -- accept either, and say which you saw. With #262 the dashboard's queue panel shows the entry as \"Waiting to be stored\", not \"Retrying\": it has not failed.",
-      "observed": "3 such entries at 17:15 UTC, 2026-09-19, one per METADATA_ERROR refusal. Timed end to end on the same day against datapipe #262: a probe refused at 22:33:47Z entered the queue at ~23:00:30Z (the :00 slot, 27 min later) with failureReason \"Kept after a metadata failure (raw data stored without Psych-DS files)\" -- the NEW label -- nextRetryAt createdAt+~1 min, and was stored by ~23:05Z. So a kept copy is visible in the queue for only about 5 minutes: miss that window and the only evidence left is the rejections panel."
+      "consequence": "Within the next pending-recovery slot (:00/:15/:30/:45, for entries older than ~15 minutes) a queue entry appears for that filename. EXPECT it. Do not flag it. Its failureReason is \"Kept after a metadata failure (raw data stored without Psych-DS files)\" on a current deployment (api-data.ts labels the pending copy, scheduled-pending-recovery.ts reads the label); a deployment that predates that labeling shows the generic \"Recovered from interrupted upload (server restart or memory limit)\" instead -- accept either, and say which you saw. On a current deployment the dashboard's queue panel shows the entry as \"Waiting to be stored\", not \"Retrying\": it has not failed. A kept copy is visible in the queue for only about 5 minutes before its own first storage attempt; miss that window and the only evidence left is the rejections panel."
     },
     {
       "id": "rejections-panel-hidden-behind-the-queue",
       "summary": "The dashboard shows the rejections panel only while the upload queue is empty.",
-      "consequence": "Any `expectDashboard` line about an error-panel entry can only be checked when nothing is queued. After a recovery scenario has queued a partial, that is roughly 1 h 5 min away -- the entry's first storage attempt is nextRetryAt, an hour after it was queued. Check the rejections panel BEFORE running the recovery scenarios, or use `GET /api/queuestatus` and the endpoint response codes as the evidence instead.",
-      "observed": "2026-09-19: the panel was never visible after 22:40Z, so the reworded METADATA_ERROR detail from datapipe #261 was never seen on the new build, and \"Clear this list\" was never exercised."
-    },
-    {
-      "id": "queue-panel-is-mid-polish",
-      "summary": "datapipe #262 landed the waiting/retrying/failed split, and a follow-up polish PR to QueuePanel.js is in flight.",
-      "consequence": "Assert on the three KINDS (\"Waiting to be stored\" / \"Retrying\" / \"Failed\") and on the panel's weight (plain neutral panel when everything is waiting; quiet orange left edge when something is retrying; a filled red alert only for a permanent failure). Do NOT assert on the column headers, the row sub-line wording or how a filename is written -- those are being changed. Report a mismatch there as \"the panel is mid-polish\", not as a failure."
+      "consequence": "Any `expectDashboard` line about an error-panel entry can only be checked when nothing is queued. On the current build a recovery scenario's queue entry is usually gone within seconds -- the same sweep tick that queues it also delivers it -- so the panel comes back quickly; check it before running the recovery scenarios, or shortly after, or use `GET /api/queuestatus` and the endpoint response codes as evidence that does not depend on the panel's visibility at all. A deployment running an OLDER BUILD still holds the panel hidden for roughly 1 h 5 min after a recovery scenario queues a partial (its first storage attempt is nextRetryAt = createdAt + 60 min); on that build, check the panel before the recovery scenarios."
     },
     {
       "id": "assert-on-code-never-message",
@@ -70,7 +59,7 @@
     {
       "id": "sessions-from-pages-that-never-ran",
       "summary": "Loading the jsPsych page starts a session before any trial runs, so a page opened and navigated away from leaves a live-session row behind until the sweep clears it.",
-      "consequence": "Never assert on the NUMBER of sessions in progress. Match rows by this run's `run` id."
+      "consequence": "Never assert on the NUMBER of sessions in progress. Match rows by this scenario's `run` id."
     }
   ],
   "scenarios": [
@@ -94,11 +83,11 @@
       "expectDashboard": [
         "While running: a \"Sessions in progress\" panel with a row reading \"In progress\" and a \"Running for\" value. Match the row, not the count.",
         "Within ~30 s of the page reporting finished: that row is gone.",
-        "No new queue entry for this run's filename."
+        "No new queue entry for this scenario's filename."
       ],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching this run's filename stem; ignore `.psychds-ignore` and the derived Psych-DS copies",
+        "countBy": "files matching this scenario's filename stem; ignore `.psychds-ignore` and the derived Psych-DS copies",
         "naming": "testbed-<run>-<stamp>-<pid>.csv, exactly the name in the result's filenames",
         "completeness": "complete: a header row, the instruction trial, and one row per trial",
         "location": "experiment folder root, or data/raw/ with metadata on (plus a derived subject-..._data.csv beside it)"
@@ -109,7 +98,7 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "2026-09-19 with trials=40: final save 201, file in data/raw/, in-progress row behaved as described. PASS. Re-run at 22:26:32Z with trials=60 (the run that was meant to be abandoned and finished first): 60 trials in ~66 s, status finished at 22:28:11Z, one recorded request `final-save` 201 to https://datapipe-test.web.app/api/data/ -- and the completed-session count on the dashboard went 5 to 6. PASS. 2026-09-20 with trials=8: `data-testbed-schema=\"2\"` present from load, 8/8 trials, final-save 201 at 00:07:26.486Z, completed-session count went 6 to 8 across this and the vanilla run below. PASS."
+      "verified": "live"
     },
     {
       "id": "baseline-no-streaming",
@@ -125,12 +114,12 @@
         "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "library" }]
       },
       "expectDashboard": [
-        "No row for this run in \"Sessions in progress\" at any point -- nothing calls /api/session.",
+        "No row for this scenario in \"Sessions in progress\" at any point -- nothing calls /api/session.",
         "No queue entry."
       ],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching this run's filename stem",
+        "countBy": "files matching this scenario's filename stem",
         "naming": "the name in the result's filenames, ending .json",
         "completeness": "complete",
         "location": "experiment folder root, or data/raw/ with metadata on"
@@ -141,7 +130,7 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "2026-09-19 with trials=10 (csv): final save 201, no in-progress row, file in data/raw/. PASS."
+      "verified": "live"
     },
     {
       "id": "ended-early",
@@ -157,10 +146,10 @@
         "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "library" }],
         "notes": ["a note reading \"timeline ended early at trial 5 of 20\""]
       },
-      "expectDashboard": ["No row for this run afterwards; no new error-panel entry; no queue entry."],
+      "expectDashboard": ["No row for this scenario afterwards; no new error-panel entry; no queue entry."],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching this run's filename stem",
+        "countBy": "files matching this scenario's filename stem",
         "naming": "the name in the result's filenames",
         "completeness": "complete for what ran: 5 trial rows, not 20",
         "location": "experiment folder root, or data/raw/ with metadata on"
@@ -171,7 +160,7 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "not run on 2026-09-19."
+      "verified": "code"
     },
     {
       "id": "vanilla-streaming",
@@ -194,12 +183,12 @@
         "notes": ["a note saying the `session` entry's status is reconstructed from the client's outcome, not observed on the wire"]
       },
       "expectDashboard": [
-        "While running: a row for this run reading \"In progress\".",
+        "While running: a row for this scenario reading \"In progress\".",
         "After finishing: that row is gone."
       ],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching this run's filename stem",
+        "countBy": "files matching this scenario's filename stem",
         "naming": "the name in the result's filenames",
         "completeness": "complete",
         "location": "experiment folder root, or data/raw/ with metadata on"
@@ -210,7 +199,8 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "2026-09-19 with trials=8 and condition=1: gzipped POST /api/data returned 201, file in data/raw/. PASS -- but that run had to remove the `trial_type` required field by hand first, which is why the page now emits the column. 2026-09-20, an ad hoc run with trials=8 and condition=1 (the sessionId fix's confirmation): sessionId was null at the `ready` sample (00:08:01, 8 s after load) and present -- `mnVjoZZWfqFtQ49yS7CNBl71` -- at every `running` sample after the start key (00:08:12, 00:08:14, 00:08:16), i.e. captured as soon as /api/session landed rather than only at the end. condition assigned: 1. final-save 201 in 4789 ms, `source: \"page\"`, URL with no trailing slash. PASS."
+      "verified": "partial",
+      "verifiedNote": "The page's requests (session, final-save) and the stored file are confirmed live, including that `sessionId` is captured as soon as `/api/session` lands rather than only at the end. The live-session dashboard row has not been confirmed for this scenario."
     },
     {
       "id": "vanilla-uncompressed",
@@ -231,7 +221,7 @@
       "expectDashboard": ["Identical to vanilla-streaming."],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching this run's filename stem",
+        "countBy": "files matching this scenario's filename stem",
         "naming": "the name in the result's filenames",
         "completeness": "complete, the same shape as the gzipped run",
         "location": "experiment folder root, or data/raw/ with metadata on"
@@ -242,7 +232,7 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "not run on 2026-09-19; only the gzipped path was exercised."
+      "verified": "code"
     },
     {
       "id": "duplicate-rejection",
@@ -265,7 +255,7 @@
       "expectDashboard": ["A new rejections-panel entry with the code FILE_EXISTS. Assert on the code, not the message. The panel is only rendered while the upload queue is empty -- see knownIssues."],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching this run's filename stem -- the second request must not add a copy or overwrite the first",
+        "countBy": "files matching this scenario's filename stem -- the second request must not add a copy or overwrite the first",
         "naming": "the name in the result's filenames",
         "completeness": "complete",
         "location": "experiment folder root, or data/raw/ with metadata on"
@@ -276,7 +266,8 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "2026-09-19 via the button (the published page predated `resubmit`): 400 FILE_EXISTS. PASS."
+      "verified": "partial",
+      "verifiedNote": "The refusal itself (400 FILE_EXISTS on resubmit) is confirmed live. The rejections-panel entry and the stored-file count have not been confirmed."
     },
     {
       "id": "validation-failure",
@@ -313,13 +304,13 @@
         "checkStorageAfter": "n/a -- but re-check at the next :00/:15/:30/:45 slot that NOTHING was queued"
       },
       "automation": "full",
-      "observed": "not run; code-derived. api-data.ts (the useValidation block and its position relative to persistPending), validate-csv.ts and validate-json.ts: both validators check `requiredFields` against the CSV header row / the union of JSON object keys, and with allowCSV and allowJSON both on by default a CSV missing the column fails each in turn."
+      "verified": "code"
     },
     {
       "id": "abandoned-tab",
       "order": 8,
       "title": "Abandoned tab",
-      "description": "Close the tab half-way. Within seconds the dashboard row reads `Connection lost — may resume`; after 10 minutes, `Stopped — being recovered`; the sweep then queues the staged trials, and the `.partial.json` reaches storage about an hour later, not within 15 minutes.",
+      "description": "Close the tab half-way. Within seconds the dashboard row reads `Connection lost — may resume`; after 10 minutes, `Stopped — being recovered`; the sweep then queues the staged trials, and on the current build the `.partial.json` reaches storage within that same ten-to-fifteen-minute window, not an hour later.",
       "page": "jspsych",
       "params": { "trials": "120", "format": "csv", "auto": "1", "stream": "1" },
       "driverActions": [
@@ -328,7 +319,7 @@
         "Poll `data-testbed-trials-completed` about every 5 s. Close the tab when it reaches about half of `data-testbed-trials-planned` (~60). Do NOT time this off the clock.",
         "Note the wall-clock time of the close: the recovery clock starts at the socket drop. An open tab counts as live."
       ],
-      "sizingNote": "trials was raised from 60 to 120 on purpose, rather than leaving 60 and polling faster. At the FAST end of the measured pace (1.1 s/trial, the rate the 2026-09-19 run actually hit) 60 trials finish in ~66 s, so half-way arrives at ~33 s and leaves only ~33 s of margin -- less than a poll-and-close cycle of extension tool calls reliably fits in. That run overshot and the tab FINISHED before it could be closed, then produced 40 trials on the retry instead of the 30 aimed at. At 120 trials the run lasts 132-204 s, half-way arrives at 66-102 s, and there is 66-102 s left afterwards: even a 30 s overshoot closes the tab around trial 87 of 120, still plainly partial. A 5 s cadence is then comfortable, and the cost is ~2 minutes of waiting.",
+      "sizingNote": "trials is 120, not 60, on purpose. At the FAST end of the measured pace (1.1 s/trial) 60 trials finish in ~66 s, so half-way arrives at ~33 s and leaves only ~33 s of margin -- less than a poll-and-close cycle of extension tool calls reliably fits in, and a run can finish on its own before the tab is closed. At 120 trials the run lasts 132-204 s, half-way arrives at 66-102 s, and there is 66-102 s left afterwards: even a 30 s overshoot closes the tab around trial 87 of 120, still plainly partial. A 5 s poll cadence is then comfortable, and the cost is ~2 minutes of waiting.",
       "expectPage": {
         "status": "running",
         "trials": "trialsCompleted is roughly half of trialsPlanned (~60 of 120) and MUST be less than trialsPlanned -- if it reached it, the run finished and this scenario did not happen. Record the exact value, but expect the queue entry's \"Recovered from an abandoned session (N trials)\" to be a FEW LESS than it, not equal: datapipe-client only flushes a trial to staging once flushEveryNTrials trials are buffered or flushIntervalMs has elapsed (10 and 10000ms on datapipe-test), so up to flushEveryNTrials-1 trials counted in trialsCompleted can still be unflushed, and lost, when the tab dies. Assert N is in [trialsCompleted - (flushEveryNTrials - 1), trialsCompleted], never trialsCompleted exactly.",
@@ -339,14 +330,14 @@
         ]
       },
       "expectDashboard": [
-        "Within seconds of the tab closing: the row for this run reads \"Connection lost — may resume\".",
+        "Within seconds of the tab closing: the row for this scenario reads \"Connection lost — may resume\".",
         "About 10-12 minutes later: \"Stopped — being recovered\".",
-        "Then the row disappears and a queue entry appears with failureReason \"Recovered from an abandoned session (N trials)\", status pending, retryCount 0, lastAttemptAt null, nextRetryAt one hour out. N is expected to be a FEW LESS than the trialsCompleted you read before closing -- see `expectPage.trials` above -- not equal to it.",
-        "The queue panel lists it under the kind \"Waiting to be stored\", in a plain neutral panel with no coloured edge -- nothing has failed. Do not assert on the panel's column headers or row sub-lines; see knownIssues."
+        "Then the row disappears and a queue entry appears with failureReason \"Recovered from an abandoned session (N trials)\", status pending, retryCount 0, lastAttemptAt null. On the current build nextRetryAt equals its own createdAt (the sweep gives a recovered partial its first attempt immediately) and the entry is delivered on that same sweep tick; an older build instead sets nextRetryAt to createdAt + 60 minutes -- compare the two in GET /api/queuestatus to tell which you are looking at. N is expected to be a FEW LESS than the trialsCompleted you read before closing -- see `expectPage.trials` above -- not equal to it.",
+        "On the current build this entry usually lives only seconds, so you will often NOT catch it in the queue panel at all -- look for the file in storage instead, or poll GET /api/queuestatus for an entry that is already `completed` or gone. If you do catch it (or on an older build, where it lingers for about an hour), it lists under the kind \"Waiting to be stored\", in a plain neutral panel with no coloured edge -- nothing has failed. Do not assert on the panel's column headers or row sub-lines; see knownIssues."
       ],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching `<this run's filename stem>-<8 hex>.partial.json`",
+        "countBy": "files matching `<this scenario's filename stem>-<8 hex>.partial.json`",
         "naming": "<submitted filename without its extension>-<8 hex characters>.partial.json. The hash suffix is ALWAYS there -- partialFilenameFor derives it from the session id, not from a name collision.",
         "completeness": "partial: only the trials staged before the tab closed",
         "location": "experiment folder root, or data/raw/ with metadata on"
@@ -354,12 +345,13 @@
       "timing": {
         "pageRun": "~70-105 s to half-way at 120 trials, then closed",
         "checkDashboardAfter": "immediately, at ~11 min, and at ~14 min",
-        "checkStorageAfter": "65-75 minutes after the tab was closed"
+        "checkStorageAfter": "about 10-15 minutes after the tab was closed on the current build; 65-75 minutes on an older one"
       },
       "deferredCheck": true,
-      "deferredNote": "Re-open the folder 75 minutes after the tab was closed and look for one *.partial.json matching this run's filename stem. Until then `GET /api/queuestatus?experimentID=<id>` is better evidence than the dashboard panel: it shows retryCount and lastAttemptAt. A queue entry that has never been attempted is the expected state, not a failure.",
+      "deferredNote": "The storage check still cannot be made the moment the tab closes -- it needs the abandonment grace period plus the next sweep tick either way. On the current build that is only about 10-15 minutes, which the scenarios run after this one in `order` will often absorb on their own; check the folder for one *.partial.json matching this scenario's filename stem once you reach (or shortly after) `closed-experiment`, rather than scheduling a separate return visit. On an older build the wait is still ~75 minutes and needs a real return visit. Either way, `GET /api/queuestatus?experimentID=<id>` is better evidence than the dashboard panel while you wait: a queue entry that has never been attempted (retryCount 0, lastAttemptAt null) is expected, not a failure, and an entry already `completed` or gone means the file is already in storage.",
       "automation": "agent",
-      "observed": "2026-09-19 with trials=60, closed at ~50: queued 12 min after the tab closed as `data/raw/testbed-...-6b33aa40.partial.json`, nextRetryAt exactly +60 min, live row transitions as described. PASS up to the queue; the Drive write itself was not waited for. Re-run at 22:29Z, also trials=60: the FIRST attempt overshot and the run finished on its own in ~66 s (which is why trials is now 120 and the driver polls the counter); the second closed the tab at 22:30:06Z at 40 trials. Queue entry createdAt 22:40:13Z -- 10 min 7 s later -- filename `data/raw/testbed-queue-ui-2229-20260919T222844-5bbq3d6n-0fc2d2a7.partial.json`, status pending, errorCode 0, retryCount 0, lastAttemptAt null, nextRetryAt 23:40:13Z (+1 h exactly), failureReason \"Recovered from an abandoned session (40 trials)\" -- N matched the trials that had run. The dashboard row read \"Connection lost — may resume\" at 22:34Z. The queue panel listed it as \"Waiting to be stored\" in a plain neutral panel (measured: no fill, uniform 1px grey border). PASS up to the queue; the Drive write was again not waited for. 2026-09-20 with trials=120: filename captured before closing (`testbed-run2-abandon-20260920T000254-7en1ll2y.csv`), tab closed at 00:04:48Z with trialsCompleted last read at 64 (~70 s after the first trial). Queue entry createdAt 00:15:13.221Z -- 10 min 25 s after the close -- failureReason \"Recovered from an abandoned session (60 trials)\", nextRetryAt 01:15:13.221Z (+60 min exactly). N (60) was LESS than trialsCompleted (64) by 4 -- inside the flushEveryNTrials=10 window this manifest's `expectPage.trials`/`expectDashboard` now expect, not equal to it as the text used to imply. PASS; this is what motivated the range assertion above."
+      "verified": "partial",
+      "verifiedNote": "The live-session row transitions (\"Connection lost — may resume\" then \"Stopped — being recovered\"), the queue entry's appearance, and its fields (failureReason, retryCount 0, lastAttemptAt null) are confirmed live. How far nextRetryAt sits from createdAt depends on which build was live at the time -- see `timingFacts` -- and has not been reconfirmed since. The deferred storage check -- the `.partial.json` actually landing in Drive -- has never been confirmed to complete."
     },
     {
       "id": "failed-final-submission",
@@ -384,12 +376,12 @@
         ]
       },
       "expectDashboard": [
-        "A new rejections-panel entry with the code FILE_EXISTS -- visible only while the upload queue is empty, so check it BEFORE the partial is queued.",
-        "Within about 15 minutes of the refusal: a queue entry for `<stem>-<8 hex>.partial.json`, kind \"Waiting to be stored\"."
+        "A new rejections-panel entry with the code FILE_EXISTS -- visible only while the upload queue is empty, so check it BEFORE the partial is queued (or after it has been delivered).",
+        "Within about 15 minutes of the refusal: a queue entry for `<stem>-<8 hex>.partial.json`, kind \"Waiting to be stored\". On the current build this entry is usually delivered the same sweep tick it is queued on, so it may already be `completed` or gone by the time you check -- an older build instead leaves it visible for about an hour."
       ],
       "expectStorage": {
         "files": 2,
-        "countBy": "files matching this run's filename stem: the pre-claim file, and later the -<8 hex>.partial.json",
+        "countBy": "files matching this scenario's filename stem: the pre-claim file, and later the -<8 hex>.partial.json",
         "naming": "the pre-claim file under the run's own filename, plus <stem>-<8 hex>.partial.json holding the staged trials",
         "completeness": "the pre-claim file holds one placeholder row, not data; the partial holds the real trials",
         "location": "experiment folder root, or data/raw/ with metadata on",
@@ -398,12 +390,13 @@
       "timing": {
         "pageRun": "~30 s",
         "checkDashboardAfter": "immediately, and again ~15 min after the refusal",
-        "checkStorageAfter": "the pre-claim file immediately; the partial 65-75 minutes after the refusal"
+        "checkStorageAfter": "the pre-claim file immediately; the partial about 10-15 minutes after the refusal on the current build, 65-75 minutes on an older one"
       },
       "deferredCheck": true,
-      "deferredNote": "Re-check the folder ~75 minutes after the refusal for the .partial.json. The pre-claim file is there straight away and is not the thing under test. Do NOT switch data collection off before this session's partial is visible in /api/queuestatus.",
+      "deferredNote": "On the current build, re-check the folder about 10-15 minutes after the refusal for the .partial.json -- the scenarios that run after this one in `order` will often absorb that wait on their own, so check near (or shortly after) `closed-experiment` rather than scheduling a separate return visit. An older build still needs a real return visit ~75 minutes out. The pre-claim file is there straight away either way and is not the thing under test. Do NOT switch data collection off before this session's partial has actually been recovered -- see `closed-experiment`'s `runAfterCondition`.",
       "automation": "full",
-      "observed": "2026-09-19: the testbed's own breaksave was BROKEN -- the pre-claim body was a plain sentence, refused with METADATA_ERROR on a Psych-DS experiment, so the filename was never claimed and the run silently succeeded. Reproduced by hand with a valid one-row CSV pre-claim: 201, then final save 400 FILE_EXISTS, so the refusal half PASSES. The recovery half was invalidated by switching the experiment off too early; see `ordering`. The pre-claim body is fixed in this change and the page now stops loudly if the claim fails."
+      "verified": "partial",
+      "verifiedNote": "The refusal sequence (pre-claim 201, then final-save 400 FILE_EXISTS) is confirmed live. The deferred recovery check -- the `-<8 hex>.partial.json` reaching storage after the refusal -- has never been confirmed to complete; see the `ordering` rule about closing an experiment before a recovery scenario's partial is queued."
     },
     {
       "id": "vanilla-condition",
@@ -431,7 +424,7 @@
       "expectDashboard": ["Nothing specific; the condition counter is not surfaced in the UI."],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching this run's filename stem",
+        "countBy": "files matching this scenario's filename stem",
         "naming": "the name in the result's filenames",
         "completeness": "complete",
         "location": "experiment folder root, or data/raw/ with metadata on"
@@ -443,7 +436,8 @@
       },
       "mutatesExperimentState": "turns \"Assign conditions in sequence\" ON",
       "automation": "agent",
-      "observed": "2026-09-19: two runs gave condition 0 then 1, a third (direct /api/condition) gave 0 -- round-robin over 2 conditions, as documented. PASS."
+      "verified": "partial",
+      "verifiedNote": "Sequential condition assignment (0, then 1, wrapping) is confirmed live, including via a direct `/api/condition` probe. The stored file has not been confirmed for this scenario."
     },
     {
       "id": "vanilla-condition-off",
@@ -472,7 +466,7 @@
       },
       "mutatesExperimentState": "turns \"Assign conditions in sequence\" OFF",
       "automation": "agent",
-      "observed": "not run on 2026-09-19."
+      "verified": "code"
     },
     {
       "id": "base64-valid",
@@ -496,7 +490,7 @@
       "expectDashboard": ["No new rejections-panel entry."],
       "expectStorage": {
         "files": 2,
-        "countBy": "files matching this run's filename stem",
+        "countBy": "files matching this scenario's filename stem",
         "naming": "the data file, plus <stem>.b64.txt holding the decoded text \"testbed base64 payload\"",
         "completeness": "complete",
         "location": "the data file follows the metadata layout; the base64 file ALWAYS goes to the folder root -- /api/base64 does not apply the Psych-DS layout, and it runs no metadata block, so it is unaffected by METADATA_ERROR"
@@ -508,7 +502,8 @@
       },
       "mutatesExperimentState": "turns \"Accept base64 file uploads\" ON",
       "automation": "agent",
-      "observed": "2026-09-19 by direct probe rather than through the page (the published page predated `base64`): a 1x1 PNG returned 201 and landed at the folder root at 70 bytes. PASS for the endpoint; the page path is unexercised."
+      "verified": "partial",
+      "verifiedNote": "The `/api/base64` endpoint and file placement (folder root, unaffected by the Psych-DS layout) are confirmed live via a direct probe. The page-driven flow -- running trials, then the page's own base64 request -- has not been exercised."
     },
     {
       "id": "base64-invalid",
@@ -532,7 +527,7 @@
       "expectDashboard": ["A new rejections-panel entry with the code INVALID_BASE64_DATA. Only visible while the upload queue is empty."],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching this run's filename stem -- the data file only, no .b64.txt",
+        "countBy": "files matching this scenario's filename stem -- the data file only, no .b64.txt",
         "naming": "the data file only",
         "completeness": "complete",
         "location": "experiment folder root, or data/raw/ with metadata on"
@@ -543,7 +538,8 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "agent",
-      "observed": "2026-09-19 by direct probe: 400 INVALID_BASE64_DATA, refused in 300 ms before any provider write. PASS for the endpoint; the page path is unexercised."
+      "verified": "partial",
+      "verifiedNote": "The endpoint refusal (400 INVALID_BASE64_DATA, refused before any provider write) is confirmed live via a direct probe. The page-driven flow has not been exercised."
     },
     {
       "id": "brief-dropout",
@@ -564,13 +560,13 @@
         "notes": ["an `extension-pipe:` note about a failed flush during the offline window is expected, not a failure"]
       },
       "expectDashboard": [
-        "During the offline window: the row for this run reads \"Connection lost — may resume\".",
+        "During the offline window: the row for this scenario reads \"Connection lost — may resume\".",
         "After reconnecting: back to \"In progress\" (the reconnect slot heals the disconnect stamp).",
-        "After finishing: no row for this run, and no queue entry."
+        "After finishing: no row for this scenario, and no queue entry."
       ],
       "expectStorage": {
         "files": 1,
-        "countBy": "files matching this run's filename stem -- and confirm there is NO .partial.json for it",
+        "countBy": "files matching this scenario's filename stem -- and confirm there is NO .partial.json for it",
         "naming": "the name in the result's filenames",
         "completeness": "complete, including the trials recorded while offline",
         "location": "experiment folder root, or data/raw/ with metadata on"
@@ -583,7 +579,7 @@
       },
       "automation": "manual",
       "automationNote": "The Chrome extension cannot throttle or disable the network, so an agent driving that extension cannot run this. No URL parameter was added to fake it: what is under test is the Realtime Database's own disconnect-and-heal path, and a page-level simulation would exercise neither the onDisconnect stamp nor the reconnect slot that clears it -- it would prove nothing while looking like it had. A Playwright job CAN run it with context.setOffline(true), which makes it the one non-`full` scenario worth putting in a headless job.",
-      "observed": "not run on 2026-09-19: the browser tooling had no way to go offline."
+      "verified": "code"
     },
     {
       "id": "closed-experiment",
@@ -593,7 +589,7 @@
       "page": "jspsych",
       "params": { "trials": "5", "format": "csv", "auto": "1", "stream": "1" },
       "driverActions": [
-        "STOP. Confirm first that every recovery-dependent scenario's partial is already QUEUED -- `GET /api/queuestatus?experimentID=<id>` must list an entry for `abandoned-tab` and for `failed-final-submission`. Switching collection off before that DESTROYS them.",
+        "STOP. Confirm first that recovery has actually happened for `abandoned-tab` and for `failed-final-submission`: each one's live-session row is gone from \"Sessions in progress\", AND its partial is either visible as a queue entry (pending/processing) OR already `completed`/gone in `GET /api/queuestatus?experimentID=<id>` -- on the current build a recovered partial can be delivered and drop out of the queue within seconds, so \"gone\" is a pass here, not a reason to keep waiting. Switching collection off before recovery has happened DESTROYS the still-staged session.",
         "Switch \"Accept new data\" OFF and wait for the \"Saved\" badge.",
         "Start the run as `defaults.startingARun` describes and let it run to the end.",
         "Switch \"Accept new data\" back ON afterwards if anything else follows."
@@ -605,8 +601,8 @@
         "notes": ["a `datapipe:` note that the session was not started; the page cannot see /api/session's status code itself"]
       },
       "expectDashboard": [
-        "No row for this run in \"Sessions in progress\" at any point.",
-        "New rejections-panel entries with the code DATA_COLLECTION_NOT_ACTIVE (logged twice: once by /api/session, once by /api/data). The panel is hidden while anything is queued, and by this point in the order the recovery scenarios' partials usually are -- use GET /api/queuestatus and the page's own request statuses as the evidence instead."
+        "No row for this scenario in \"Sessions in progress\" at any point.",
+        "New rejections-panel entries with the code DATA_COLLECTION_NOT_ACTIVE (logged twice: once by /api/session, once by /api/data). The panel is hidden while anything is queued; by this point in the order the recovery scenarios' partials are often already delivered and gone from the queue, in which case the panel is visible again -- but do not rely on that either way, and use GET /api/queuestatus and the page's own request statuses as the evidence instead."
       ],
       "expectStorage": { "files": 0, "countBy": "n/a", "naming": "n/a", "completeness": "nothing is written", "location": "n/a" },
       "timing": {
@@ -617,9 +613,9 @@
       "mutatesExperimentState": "turns \"Accept new data\" OFF -- and while it is off the staging sweep DISCARDS any still-staged session",
       "mustRunLast": true,
       "runAfter": ["abandoned-tab", "failed-final-submission"],
-      "runAfterCondition": "each of those scenarios' partials is visible as a queue entry in GET /api/queuestatus?experimentID=<id>",
+      "runAfterCondition": "for each of those scenarios, its live-session row is gone from \"Sessions in progress\" and its partial is either visible as a queue entry or already `completed`/gone in GET /api/queuestatus?experimentID=<id> -- recovery has happened, whether or not the entry is still there to see",
       "automation": "agent",
-      "observed": "2026-09-19: `datapipe: session not started (HTTP 400)` then final save 400 DATA_COLLECTION_NOT_ACTIVE. PASS -- but running it early is what destroyed the failed-final-submission recovery in that run. 2026-09-20: confirmed by a direct `POST /api/data` probe rather than through this page -- `{\"error\":\"DATA_COLLECTION_NOT_ACTIVE\",\"message\":\"Data collection is not active for this experiment\"}`, HTTP 400, at 00:01:45.5Z -- and it WAS logged to the rejections panel (\"One submission to this experiment was rejected... The most recent was just now.\", exactly one row), confirming a closed-experiment refusal is not silently dropped. PASS for the endpoint and the dashboard; the page path itself was not re-run."
+      "verified": "live"
     }
   ]
 }

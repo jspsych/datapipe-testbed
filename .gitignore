@@ -1,2 +1,9 @@
 .DS_Store
 node_modules/
+
+
+# .claude/skills/ IS committed (the e2e driver runbook lives there). Everything
+# else under .claude/ is per-machine.
+.claude/*
+!.claude/skills/
+.claude/settings.local.json

@@ -77,6 +77,16 @@ reach `INVALID_DATA` without editing the experiment.
 
 ## Driving it
 
+Three things in this repo exist for driving the testbed rather than using it by
+hand: the scenario manifest (`site/scenarios.json`, described below), the driver
+runbook — a Claude Code skill in `.claude/skills/e2e-testbed/`, run with
+`/e2e-testbed` from a session started in this checkout — and `runs/`, the
+reports those runs produce. [`docs/e2e-testing.md`](docs/e2e-testing.md) is the
+overview. DataPipe itself lives in
+[`jspsych/datapipe`](https://github.com/jspsych/datapipe); nothing about testing
+it end to end is kept there.
+
+
 The pages are also meant to be run by an agent or a headless job, so a run
 produces a result a driver can assert on instead of prose to read.
 
@@ -84,8 +94,9 @@ produces a result a driver can assert on instead of prose to read.
 
 A free-form id for one run. It is echoed into the result below **and into the
 filename**, which is the part of a run that outlives the tab: it is how you
-recognise a file — or, an hour later, a recovered `.partial.json` — as having
-come from a particular scenario.
+recognise a file — or, ten to fifteen minutes later, a recovered
+`.partial.json` (up to an hour on an older deployment) — as having come from a
+particular scenario.
 
 ### The result contract
 
@@ -131,9 +142,9 @@ the timeline starts, and a run whose pre-claim was refused ends there rather
 than running trials that would prove nothing.
 
 **`ready` is the one a driver waits for before sending the start key**, and
-`running` is what proves the key landed. Schema 1 set `running` at page load,
-before any keypress, and a driver that read it as "trials are advancing" was
-wrong twice on 2026-09-19. `startedAt` is likewise when the *page* opened the
+`running` is what proves the key landed. Schema 1 sets `running` at page
+load, before any keypress, so a driver that reads it as "trials are
+advancing" will be wrong. `startedAt` is likewise when the *page* opened the
 result, not when the participant started.
 
 #### The trial counter
@@ -165,11 +176,10 @@ but not yet written anywhere, at any given moment. A tab closed at that
 moment loses them: `trialsCompleted` at the close is **not** what the
 recovered `.partial.json` will hold.
 
-OBSERVED 2026-09-20: a driver closed the `abandoned-tab` scenario's tab at
-`trialsCompleted === 64`; the recovered partial held **60** trials. **A
-driver checking a recovered partial's trial count should assert a range —
-`trialsCompleted` minus up to `flushEveryNTrials - 1` through
-`trialsCompleted` — never exact equality.**
+For example, a tab closed at `trialsCompleted === 64` can recover as a
+60-trial partial. **A driver checking a recovered partial's trial count
+should assert a range — `trialsCompleted` minus up to `flushEveryNTrials - 1`
+through `trialsCompleted` — never exact equality.**
 
 #### Reading it
 
@@ -242,9 +252,8 @@ reconstructed, and how.
 
 That slash is not a typo. `datapipe-client`'s `endpoint()`
 (`packages/client/src/http.ts`) builds `${base}/api/${path}/`. It is harmless on
-a live endpoint: Firebase Hosting matches the rewrite with or without the slash
-(checked on datapipe-test, 2026-09-19 — same response, same latency, no
-redirect). It only bites on a path with NO rewrite, which falls through to the
+a live endpoint: Firebase Hosting matches the rewrite with or without the
+trailing slash. It only bites on a path with NO rewrite, which falls through to the
 Next.js app and is 308-redirected to the slashless form. The pages' own requests
 omit the slash, and the recorded URLs are left exactly as each was sent rather
 than tidied into agreement.
@@ -260,10 +269,10 @@ reads `null` there simply because that round trip (and, with `?condition`
 set, the awaited `getCondition()` call ahead of it) has not resolved yet, not
 because of anything the keypress causes. Once it resolves, the page reads
 the public `session.sessionId` as soon as it is set, so an abandoned run
-still carries it. OBSERVED 2026-09-20: still `null` 8 s after page load;
-present at the first `running` sample and every sample after. A driver
-should expect `null` while waiting at `ready` and treat a non-null value as
-"`/api/session` has now landed" — with no fixed timing relative to the key.
+still carries it. A driver should expect `null` while waiting at `ready` — it
+can still read `null` several seconds after page load — and treat a non-null
+value as "`/api/session` has now landed", with no fixed timing relative to
+the key.
 
 **The jsPsych page leaves it `null` for the whole run, and that is not a
 bug.**
@@ -308,15 +317,30 @@ any session still staged, so running it early destroys the recoveries the
 `deferredCheck` scenarios are waiting on. `mustRunLast`, `runAfter` and
 `mutatesExperimentState` say which scenarios constrain which.
 
-Scenarios marked `deferredCheck` cannot finish inside a normal run: a recovered
-partial session is *queued* by the five-minute sweep and its first upload
-attempt is an hour later, so the file appears in storage roughly 65–75 minutes
-after the participant dropped out. `deferredNote` says what to look for and
-when.
+Scenarios marked `deferredCheck` still need a real wait: a recovered partial
+session is *queued* by the five-minute sweep, and on the current deployment
+its first upload attempt runs on that same sweep tick, so the file appears in
+storage roughly ten to fifteen minutes after the participant dropped out — an
+older deployment still waits an hour for that first attempt, landing the file
+65–75 minutes out instead. `deferredNote` says what to look for and when, and
+how to tell which deployment you have.
 
-`preconditions` and `knownIssues` are worth reading before the first run. The
-one that bites hardest: on Google Drive a `.psychds-ignore` file accumulates
-per upload, so count files by filename stem, never by folder total.
+`preconditions` and `knownIssues` are worth reading before the first run. One
+that still bites: `.psychds-ignore` is claimed once per experiment now, but an
+experiment that predates the claim (or a deployment that predates it entirely)
+can still hold more than one copy, so count files by filename stem, never by
+folder total.
+
+Each scenario also carries a `verified` field instead of a run log:
+`"live"` means its page/dashboard/storage expectations have been confirmed
+against a live deployment; `"code"` means they are derived from the handler
+and component source only, not yet confirmed live; `"partial"` means part of
+it is confirmed and part is not, with `verifiedNote` saying which part. A
+run's findings belong in its own report (see the DataPipe repo's e2e skill),
+never pasted back into the manifest as a date, a clock time, or narration of
+what a particular run did — `verified`/`verifiedNote` are the only place a
+run's outcome is allowed to leave a trace here, and only as a timeless
+marker.
 
 The runbook that drives all of this lives in the DataPipe repo, at
 `.claude/skills/e2e-testbed/SKILL.md`.

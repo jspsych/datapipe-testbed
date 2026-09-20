@@ -11,9 +11,9 @@ export const DEFAULT_BASE = "https://datapipe-test.web.app";
  *
  * No trailing slash, deliberately: it is the path exactly as firebase.json
  * spells the rewrite. On a LIVE endpoint the slash makes no difference --
- * Firebase Hosting matches the rewrite either way (checked on datapipe-test,
- * 2026-09-19: same response, same latency, no redirect). It matters on a path
- * with no rewrite at all -- a removed endpoint, a typo -- which falls through
+ * Firebase Hosting matches the rewrite either way (same response, same
+ * latency, no redirect). It matters on a path with no rewrite at all -- a
+ * removed endpoint, a typo -- which falls through
  * to the Next.js app, gets a 308 to the slashless form, and then a CORS-less
  * 404 that `fetch` reports as nothing more useful than "Failed to fetch". A
  * driver probing whether a route is gone needs the slashless form to get a
@@ -130,8 +130,8 @@ export function readParams() {
 // whose pre-claim was refused is meaningless, so it ends there rather than
 // running trials it would prove nothing with.
 //
-// Schema 1 set `running` at page load, before the first keypress. A driver
-// that read it as "trials are advancing" was wrong twice on 2026-09-19.
+// Schema 1 sets `running` at page load, before the first keypress. A driver
+// that reads it as "trials are advancing" will be wrong.
 //
 // A tab closed mid-run never leaves a terminal status, which is exactly what
 // the abandoned-session scenarios want to observe.
