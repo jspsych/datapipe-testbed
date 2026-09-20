@@ -149,6 +149,28 @@ with `?trials=10` the stored CSV holds 11 rows while `trialsCompleted` stops at
 10. The counter is about the task; a driver should not have to know how many
 non-task screens a page happens to show first.
 
+**`trialsCompleted` counts what happened on screen, not what is durable yet —
+a dropped tab can lose the last few trials.** `datapipe-client`'s
+`DataPipeSession.record()` (`packages/client/src/session.ts`) buffers each
+admitted trial and only writes a batch to the Realtime Database staging tier
+when the buffer reaches `flushEveryNTrials` trials (`record()`, lines
+309–313) **or** `flushIntervalMs` has elapsed since the first unflushed trial
+in the buffer, via a timer (`scheduleFlush()`/timer fire, lines 518–524) —
+whichever comes first. The server hands both numbers to the client in the
+`POST /api/session` response; on `datapipe-test` they are `flushEveryNTrials:
+10` and `flushIntervalMs: 10000` (10 s) (`functions/src/staging-assembly.ts`
+in the DataPipe repo). So at most `flushEveryNTrials - 1` trials — up to 9 on
+this deployment — can be sitting in the buffer, counted in `trialsCompleted`,
+but not yet written anywhere, at any given moment. A tab closed at that
+moment loses them: `trialsCompleted` at the close is **not** what the
+recovered `.partial.json` will hold.
+
+OBSERVED 2026-09-20: a driver closed the `abandoned-tab` scenario's tab at
+`trialsCompleted === 64`; the recovered partial held **60** trials. **A
+driver checking a recovered partial's trial count should assert a range —
+`trialsCompleted` minus up to `flushEveryNTrials - 1` through
+`trialsCompleted` — never exact equality.**
+
 #### Reading it
 
 A driver that cannot evaluate JavaScript in the page's own world reads all of
@@ -156,12 +178,20 @@ it from the DOM — on `<html>`:
 
 | Attribute | |
 |---|---|
+| `data-testbed-schema` | `schema`, read this FIRST (see below) |
 | `data-testbed-status` | the status above |
 | `data-testbed-trials-completed` | `trialsCompleted`, updated as each trial ends |
 | `data-testbed-trials-planned` | `trialsPlanned` |
 
 plus the full JSON in `<pre id="testbed-result">` under *Machine-readable
 result* at the bottom of each page.
+
+**Learn the schema with one DOM read, before trusting anything else.**
+`data-testbed-schema` exists so a driver does not have to parse
+`#testbed-result`'s JSON just to find out which contract it is about to rely
+on. Read it first; fall back to the JSON's `schema` field if the attribute is
+ever absent (an older published page that predates it), then to schema-1
+behaviour (below) if neither is present.
 
 **The DOM is the primary interface; the page global is not.** A browser
 extension evaluating JavaScript does so in an isolated world and may not see
@@ -170,17 +200,43 @@ convenience for same-world drivers such as Playwright.
 
 #### What `requests` does and does not hold
 
-**Only the requests the page issues itself** carry `source: "page"`, a real
-`ms`, and a URL with no trailing slash. The extension and `datapipe-client`
-make their own — `POST /api/session`, the jsPsych page's final `POST /api/data`,
-and the staging writes — and the page cannot see them. `fetch` is deliberately
-not wrapped to catch them: staging uses its own transport rather than `fetch`,
-and the two requests a wrapper *would* intercept are the two most easily broken
-by touching them (a gzip `Blob` body, and whatever is sent while the page
-unloads). What those paths do surface — the extension's `on_save` callback, the
-library warnings mirrored into the log, the assigned condition, the session id
-— is recorded with `source: "library"`, an unavoidably null `ms`, and a URL
-ending in a slash, and `notes` says plainly which per-request detail is missing.
+**Only the requests the page issues itself with its own `fetch`** carry
+`source: "page"`, a real `ms` timed around that `fetch`, and a URL with no
+trailing slash. `fetch` is deliberately not wrapped to catch what
+`datapipe-client` or the extension send: staging uses its own transport
+rather than `fetch`, and the two requests a wrapper *would* intercept are the
+two most easily broken by touching them (a gzip `Blob` body, and whatever is
+sent while the page unloads).
+
+That leaves two different situations for a request the page did not send
+itself, and they are NOT treated the same:
+
+- **The vanilla page calls a client function it can await and read the
+  outcome of** — `DataPipe.getCondition()` and (indirectly, via `flush()`)
+  the `/api/session` round trip `DataPipe.createSession()` starts in the
+  background. Neither hands the page a `Response`, so the page cannot see the
+  real HTTP status or the wire timing — but it CAN observe success/failure
+  and time the whole call. Those land in `requests` as `label: "condition"`
+  and `label: "session"`, `source: "library"`, a `ms` timed around the call
+  (not the request itself), and a **status the page infers, not reads**: 200
+  on success (implied by a returned condition, or by the session reporting
+  `enabled`), or the status parsed out of a thrown error's message when
+  there is one. A `notes` line on each says explicitly that the status is
+  reconstructed, not observed on the wire.
+- **Nothing at all is observable for a request the extension issues on the
+  jsPsych page** — `POST /api/session`, the staging writes, and the final
+  `POST /api/data` all happen inside `@jspsych/extension-pipe`, which keeps
+  its session in a `private` field and exposes no getter, no event, and no
+  per-request detail beyond the final `on_save({ok, status, body})`
+  callback. So on the **jsPsych page**, `/api/session` gets **no `requests`
+  entry at all** — only the `notes` line saying so. The final save is the
+  one exception: `on_save` gives a real status and body, which the page
+  records as `label: "final-save"`, `source: "library"`, an unavoidably null
+  `ms` (the extension started that request, not the page), and a URL ending
+  in a slash.
+
+`notes` always says plainly which per-request detail is missing or
+reconstructed, and how.
 
 That slash is not a typo. `datapipe-client`'s `endpoint()`
 (`packages/client/src/http.ts`) builds `${base}/api/${path}/`. It is harmless on
@@ -193,11 +249,22 @@ than tidied into agreement.
 
 #### `sessionId`
 
-**The plain JavaScript page reports it** — it calls `DataPipe.createSession()`
-itself and reads the public `session.sessionId`, as soon as `POST /api/session`
-lands rather than only at the end, so an abandoned run still carries it.
+**On the plain JavaScript page it is `null` at `ready`, and lands whenever
+`POST /api/session`'s round trip happens to settle — not because it is gated
+behind the start key.** `site/vanilla/experiment.js`'s `main()` calls
+`DataPipe.createSession()` synchronously, before `waitForKey()`, so the
+request is already in flight while the page sits at `ready`; `sessionId`
+reads `null` there simply because that round trip (and, with `?condition`
+set, the awaited `getCondition()` call ahead of it) has not resolved yet, not
+because of anything the keypress causes. Once it resolves, the page reads
+the public `session.sessionId` as soon as it is set, so an abandoned run
+still carries it. OBSERVED 2026-09-20: still `null` 8 s after page load;
+present at the first `running` sample and every sample after. A driver
+should expect `null` while waiting at `ready` and treat a non-null value as
+"`/api/session` has now landed" — with no fixed timing relative to the key.
 
-**The jsPsych page leaves it `null`, and that is not a bug.**
+**The jsPsych page leaves it `null` for the whole run, and that is not a
+bug.**
 `@jspsych/extension-pipe` 0.2.0 keeps its `DataPipeSession` in a field its
 source declares `private` and exposes nothing else: no getter, no event, and an
 `on_save` result of `{ok, status, body}` with no id in it. TypeScript's

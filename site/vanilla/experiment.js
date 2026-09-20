@@ -183,16 +183,47 @@ async function main() {
     // The one call in this library that throws. A condition decides which
     // timeline a participant runs, so there is no safe value to fall back to;
     // catching it and showing something is the documented pattern.
+    //
+    // datapipe-client does not hand back a Response for this call, so the
+    // entry below is RECONSTRUCTED from what the page can observe -- the
+    // return value or the thrown error -- not read off the wire. `ms` still
+    // times the real round trip, because it wraps the whole await.
+    const conditionStartedAt = performance.now();
     try {
       const condition = await DataPipe.getCondition({ experimentID: params.experiment });
+      const ms = Math.round(performance.now() - conditionStartedAt);
       log(`condition assigned: ${condition}`);
       setCondition(condition);
+      recordRequest({
+        label: "condition",
+        url: endpointURL(params.base, "condition"),
+        source: "library",
+        status: 200,
+        ok: true,
+        ms,
+      });
       noteResult(
-        "POST /api/condition was made inside datapipe-client; per-request " +
-          "detail is unavailable. A non-null `condition` means it returned 200."
+        "POST /api/condition was made inside datapipe-client; per-request detail is " +
+          "not observed on the wire. The `condition` entry above is reconstructed: " +
+          "status 200 is what a returned (non-null) condition implies, not a status " +
+          "read off a response."
       );
     } catch (error) {
+      const ms = Math.round(performance.now() - conditionStartedAt);
+      // getCondition() embeds the real HTTP status in its message when it has
+      // one ("...(HTTP 400)..."); parsed here rather than guessed. 0 means
+      // the request never reached DataPipe at all (offline, DNS, CORS).
+      const status = Number(/\(HTTP (\d+)\)/.exec(error.message)?.[1]) || 0;
       log("getCondition THREW -- the designed behaviour on failure", error);
+      recordRequest({
+        label: "condition",
+        url: endpointURL(params.base, "condition"),
+        source: "library",
+        status,
+        ok: false,
+        ms,
+        error: error.message,
+      });
       target.innerHTML =
         '<p class="notice">The experiment could not be started: no condition was assigned.</p>';
       noteResult(`getCondition threw (${error.name}: ${error.message}); no trials were run`);
@@ -211,11 +242,40 @@ async function main() {
       ? "streaming ON -- trials are staged as they happen"
       : "streaming OFF -- one submission at the end"
   );
-  if (params.stream) {
+  if (session) {
+    // Time and record the /api/session round trip WITHOUT reaching into
+    // DataPipeSession's private state or calling its internal, non-public
+    // start() directly (see session.ts's own comment on why that stays
+    // internal). `flush()` is public API, and called here -- before any trial
+    // has been recorded, so the buffer is empty -- it does exactly one useful
+    // thing per its own doc comment: wait for the start round trip to settle,
+    // then return without writing anything. Runs in the background; the trial
+    // loop below does not wait for it, same as the page always has.
+    const sessionStartedAt = performance.now();
+    session.flush().then(() => {
+      const ms = Math.round(performance.now() - sessionStartedAt);
+      recordRequest({
+        label: "session",
+        url: endpointURL(params.base, "session"),
+        source: "library",
+        status: session.enabled ? 200 : 0,
+        ok: session.enabled,
+        ms,
+        ...(session.enabled
+          ? {}
+          : {
+              error:
+                "session did not start; see the mirrored `datapipe:` warning note for the real reason/status",
+            }),
+      });
+    });
     noteResult(
-      "POST /api/session and the staging writes happen inside datapipe-client; " +
-        "per-request detail is unavailable. A non-null `sessionId` below means " +
-        "/api/session returned 200."
+      "POST /api/session and the staging writes happen inside datapipe-client; per-request " +
+        "detail is not observed on the wire. The `session` entry above is reconstructed " +
+        "from the client's `enabled`/`sessionId` outcome after an initial flush() settled " +
+        "the start round trip: status 200 is what success implies, and a failure's real " +
+        "HTTP status, when there is one, is in the mirrored `datapipe:` warning instead. " +
+        "A non-null `sessionId` below means /api/session returned 200."
     );
   }
 

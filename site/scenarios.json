@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "updated": "2026-09-19",
+  "updated": "2026-09-20",
   "about": "The end-to-end scenarios for a DataPipe deployment, as data rather than prose. site/index.html renders its \"What to check\" list from this file, and the e2e-testbed skill in the datapipe repo drives it. Add `experiment`, `base` and `run` to each scenario's params to build a URL.",
-  "observed": "Parts of this manifest were checked against https://datapipe-test.web.app at commit a10464c on 2026-09-19, and again at commit e1a6862 (datapipe #262 live from 22:33Z) during the 22:26-23:08Z run that first drove the result contract. Each scenario carries an `observed` field saying what those runs actually saw. Everything else is derived from the handler code and is still unconfirmed against a live deployment.",
+  "observed": "Parts of this manifest were checked against https://datapipe-test.web.app at commit a10464c on 2026-09-19, again at commit e1a6862 (datapipe #262 live from 22:33Z) during the 22:26-23:08Z run that first drove the result contract, and again at commit 0077cab during a 2026-09-20 00:00-00:35Z run against schema 2 on both pages. Each scenario carries an `observed` field saying what those runs actually saw. Everything else is derived from the handler code and is still unconfirmed against a live deployment.",
   "defaults": {
     "base": "https://datapipe-test.web.app",
     "pages": {
@@ -10,7 +10,7 @@
       "vanilla": "vanilla/"
     },
     "runParam": "run",
-    "resultContract": "Result contract SCHEMA 2. Read `document.documentElement.dataset.testbedStatus`, `.testbedTrialsCompleted` and `.testbedTrialsPlanned` (the `data-testbed-status`, `data-testbed-trials-completed` and `data-testbed-trials-planned` attributes on `<html>`), plus the JSON text of `#testbed-result`, from the DOM. `window.__testbed` holds the same object, but a browser extension evaluating JavaScript in an isolated world may not see a page global -- prefer the DOM. Read `schema` from `#testbed-result` first: a cached schema-1 page has no `ready` status (it reads `running` from load), no trial counter and no `source` on its requests, and every expectation below that names one of those has to fall back to the schema-1 behaviour.",
+    "resultContract": "Result contract SCHEMA 2. Read `document.documentElement.dataset.testbedSchema`, `.testbedStatus`, `.testbedTrialsCompleted` and `.testbedTrialsPlanned` (the `data-testbed-schema`, `data-testbed-status`, `data-testbed-trials-completed` and `data-testbed-trials-planned` attributes on `<html>`), plus the JSON text of `#testbed-result`, from the DOM. `window.__testbed` holds the same object, but a browser extension evaluating JavaScript in an isolated world may not see a page global -- prefer the DOM. Read `data-testbed-schema` FIRST -- a one-line DOM check, no JSON parse needed -- and fall back to the JSON's `schema` field if that attribute is absent, then to schema-1 behaviour if neither is present: a cached schema-1 page has no `ready` status (it reads `running` from load), no trial counter and no `source` on its requests, and every expectation below that names one of those has to fall back to the schema-1 behaviour.",
     "statusMachine": "ready -> running -> finished | failed, and ready -> aborted. `ready` means loaded, settings valid, waiting for the participant's first keypress -- BOTH pages sit there on \"Press any key to start\". `running` means the first trial has started. `failed` is also reachable straight from `ready` when the jsPsych page's breaksave pre-claim is refused.",
     "startingARun": "Both pages wait for a real keypress, and the first one after a navigation is usually swallowed (OBSERVED twice on 2026-09-19; `space` never worked, `f` did). Wait for `data-testbed-status` to read `ready`; then, in SEPARATE tool calls, click the page body and send ONE `f`; then verify. VERIFY MEANS `data-testbed-status` HAS MOVED FROM `ready` TO `running` -- while it still reads `ready` the key did not land, so click and send again. `f` is also a valid trial response, so an extra keypress is harmless.",
     "trialCounter": "`trialsPlanned` is the `trials` parameter; `trialsCompleted` counts only the task's own trials and reaches `trialsPlanned` exactly on a clean finish. Instruction screens are NOT counted on either page, so the jsPsych page's stored CSV holds one row more than `trialsCompleted` (its instruction trial). Poll `data-testbed-trials-completed` to act at a given trial rather than timing it off the clock."
@@ -109,7 +109,7 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "2026-09-19 with trials=40: final save 201, file in data/raw/, in-progress row behaved as described. PASS. Re-run at 22:26:32Z with trials=60 (the run that was meant to be abandoned and finished first): 60 trials in ~66 s, status finished at 22:28:11Z, one recorded request `final-save` 201 to https://datapipe-test.web.app/api/data/ -- and the completed-session count on the dashboard went 5 to 6. PASS."
+      "observed": "2026-09-19 with trials=40: final save 201, file in data/raw/, in-progress row behaved as described. PASS. Re-run at 22:26:32Z with trials=60 (the run that was meant to be abandoned and finished first): 60 trials in ~66 s, status finished at 22:28:11Z, one recorded request `final-save` 201 to https://datapipe-test.web.app/api/data/ -- and the completed-session count on the dashboard went 5 to 6. PASS. 2026-09-20 with trials=8: `data-testbed-schema=\"2\"` present from load, 8/8 trials, final-save 201 at 00:07:26.486Z, completed-session count went 6 to 8 across this and the vanilla run below. PASS."
     },
     {
       "id": "baseline-no-streaming",
@@ -186,8 +186,12 @@
       "expectPage": {
         "status": "finished",
         "trials": "trialsCompleted === trialsPlanned === 20",
-        "sessionId": "a non-empty string; this page, unlike the jsPsych one, can report it -- and it appears as soon as POST /api/session lands, not only at the end",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "page", "ms": "a real duration; the page issued this one itself" }]
+        "sessionId": "null at `ready` (the round trip has not landed yet), a non-empty string once it does -- this page, unlike the jsPsych one, can report it, as soon as it is set rather than only at the end",
+        "requests": [
+          { "label": "session", "status": 200, "ok": true, "source": "library", "ms": "a real duration, timed around an initial flush() rather than read off the wire -- see README's `requests` section" },
+          { "label": "final-save", "status": 201, "ok": true, "source": "page", "ms": "a real duration; the page issued this one itself" }
+        ],
+        "notes": ["a note saying the `session` entry's status is reconstructed from the client's outcome, not observed on the wire"]
       },
       "expectDashboard": [
         "While running: a row for this run reading \"In progress\".",
@@ -206,7 +210,7 @@
         "checkStorageAfter": "~30 s after the page reports finished"
       },
       "automation": "full",
-      "observed": "2026-09-19 with trials=8 and condition=1: gzipped POST /api/data returned 201, file in data/raw/. PASS -- but that run had to remove the `trial_type` required field by hand first, which is why the page now emits the column."
+      "observed": "2026-09-19 with trials=8 and condition=1: gzipped POST /api/data returned 201, file in data/raw/. PASS -- but that run had to remove the `trial_type` required field by hand first, which is why the page now emits the column. 2026-09-20, an ad hoc run with trials=8 and condition=1 (the sessionId fix's confirmation): sessionId was null at the `ready` sample (00:08:01, 8 s after load) and present -- `mnVjoZZWfqFtQ49yS7CNBl71` -- at every `running` sample after the start key (00:08:12, 00:08:14, 00:08:16), i.e. captured as soon as /api/session landed rather than only at the end. condition assigned: 1. final-save 201 in 4789 ms, `source: \"page\"`, URL with no trailing slash. PASS."
     },
     {
       "id": "vanilla-uncompressed",
@@ -219,7 +223,10 @@
       "expectPage": {
         "status": "finished",
         "trials": "trialsCompleted === trialsPlanned === 20",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "page" }]
+        "requests": [
+          { "label": "session", "status": 200, "ok": true, "source": "library" },
+          { "label": "final-save", "status": 201, "ok": true, "source": "page" }
+        ]
       },
       "expectDashboard": ["Identical to vanilla-streaming."],
       "expectStorage": {
@@ -324,7 +331,7 @@
       "sizingNote": "trials was raised from 60 to 120 on purpose, rather than leaving 60 and polling faster. At the FAST end of the measured pace (1.1 s/trial, the rate the 2026-09-19 run actually hit) 60 trials finish in ~66 s, so half-way arrives at ~33 s and leaves only ~33 s of margin -- less than a poll-and-close cycle of extension tool calls reliably fits in. That run overshot and the tab FINISHED before it could be closed, then produced 40 trials on the retry instead of the 30 aimed at. At 120 trials the run lasts 132-204 s, half-way arrives at 66-102 s, and there is 66-102 s left afterwards: even a 30 s overshoot closes the tab around trial 87 of 120, still plainly partial. A 5 s cadence is then comfortable, and the cost is ~2 minutes of waiting.",
       "expectPage": {
         "status": "running",
-        "trials": "trialsCompleted is roughly half of trialsPlanned (~60 of 120) and MUST be less than trialsPlanned -- if it reached it, the run finished and this scenario did not happen. Record the exact value: it is what the queue entry's \"Recovered from an abandoned session (N trials)\" should agree with.",
+        "trials": "trialsCompleted is roughly half of trialsPlanned (~60 of 120) and MUST be less than trialsPlanned -- if it reached it, the run finished and this scenario did not happen. Record the exact value, but expect the queue entry's \"Recovered from an abandoned session (N trials)\" to be a FEW LESS than it, not equal: datapipe-client only flushes a trial to staging once flushEveryNTrials trials are buffered or flushIntervalMs has elapsed (10 and 10000ms on datapipe-test), so up to flushEveryNTrials-1 trials counted in trialsCompleted can still be unflushed, and lost, when the tab dies. Assert N is in [trialsCompleted - (flushEveryNTrials - 1), trialsCompleted], never trialsCompleted exactly.",
         "requests": [],
         "notes": [
           "The page never reaches a terminal status: the tab is gone. The last status read before closing must be \"running\" -- not `ready`, which only means the start key never landed.",
@@ -334,7 +341,7 @@
       "expectDashboard": [
         "Within seconds of the tab closing: the row for this run reads \"Connection lost — may resume\".",
         "About 10-12 minutes later: \"Stopped — being recovered\".",
-        "Then the row disappears and a queue entry appears with failureReason \"Recovered from an abandoned session (N trials)\", status pending, retryCount 0, lastAttemptAt null, nextRetryAt one hour out. N should match the trialsCompleted you read before closing.",
+        "Then the row disappears and a queue entry appears with failureReason \"Recovered from an abandoned session (N trials)\", status pending, retryCount 0, lastAttemptAt null, nextRetryAt one hour out. N is expected to be a FEW LESS than the trialsCompleted you read before closing -- see `expectPage.trials` above -- not equal to it.",
         "The queue panel lists it under the kind \"Waiting to be stored\", in a plain neutral panel with no coloured edge -- nothing has failed. Do not assert on the panel's column headers or row sub-lines; see knownIssues."
       ],
       "expectStorage": {
@@ -352,7 +359,7 @@
       "deferredCheck": true,
       "deferredNote": "Re-open the folder 75 minutes after the tab was closed and look for one *.partial.json matching this run's filename stem. Until then `GET /api/queuestatus?experimentID=<id>` is better evidence than the dashboard panel: it shows retryCount and lastAttemptAt. A queue entry that has never been attempted is the expected state, not a failure.",
       "automation": "agent",
-      "observed": "2026-09-19 with trials=60, closed at ~50: queued 12 min after the tab closed as `data/raw/testbed-...-6b33aa40.partial.json`, nextRetryAt exactly +60 min, live row transitions as described. PASS up to the queue; the Drive write itself was not waited for. Re-run at 22:29Z, also trials=60: the FIRST attempt overshot and the run finished on its own in ~66 s (which is why trials is now 120 and the driver polls the counter); the second closed the tab at 22:30:06Z at 40 trials. Queue entry createdAt 22:40:13Z -- 10 min 7 s later -- filename `data/raw/testbed-queue-ui-2229-20260919T222844-5bbq3d6n-0fc2d2a7.partial.json`, status pending, errorCode 0, retryCount 0, lastAttemptAt null, nextRetryAt 23:40:13Z (+1 h exactly), failureReason \"Recovered from an abandoned session (40 trials)\" -- N matched the trials that had run. The dashboard row read \"Connection lost — may resume\" at 22:34Z. The queue panel listed it as \"Waiting to be stored\" in a plain neutral panel (measured: no fill, uniform 1px grey border). PASS up to the queue; the Drive write was again not waited for."
+      "observed": "2026-09-19 with trials=60, closed at ~50: queued 12 min after the tab closed as `data/raw/testbed-...-6b33aa40.partial.json`, nextRetryAt exactly +60 min, live row transitions as described. PASS up to the queue; the Drive write itself was not waited for. Re-run at 22:29Z, also trials=60: the FIRST attempt overshot and the run finished on its own in ~66 s (which is why trials is now 120 and the driver polls the counter); the second closed the tab at 22:30:06Z at 40 trials. Queue entry createdAt 22:40:13Z -- 10 min 7 s later -- filename `data/raw/testbed-queue-ui-2229-20260919T222844-5bbq3d6n-0fc2d2a7.partial.json`, status pending, errorCode 0, retryCount 0, lastAttemptAt null, nextRetryAt 23:40:13Z (+1 h exactly), failureReason \"Recovered from an abandoned session (40 trials)\" -- N matched the trials that had run. The dashboard row read \"Connection lost — may resume\" at 22:34Z. The queue panel listed it as \"Waiting to be stored\" in a plain neutral panel (measured: no fill, uniform 1px grey border). PASS up to the queue; the Drive write was again not waited for. 2026-09-20 with trials=120: filename captured before closing (`testbed-run2-abandon-20260920T000254-7en1ll2y.csv`), tab closed at 00:04:48Z with trialsCompleted last read at 64 (~70 s after the first trial). Queue entry createdAt 00:15:13.221Z -- 10 min 25 s after the close -- failureReason \"Recovered from an abandoned session (60 trials)\", nextRetryAt 01:15:13.221Z (+60 min exactly). N (60) was LESS than trialsCompleted (64) by 4 -- inside the flushEveryNTrials=10 window this manifest's `expectPage.trials`/`expectDashboard` now expect, not equal to it as the text used to imply. PASS; this is what motivated the range assertion above."
     },
     {
       "id": "failed-final-submission",
@@ -414,8 +421,12 @@
         "status": "finished",
         "trials": "trialsCompleted === trialsPlanned === 10",
         "condition": "an integer in 0..n-1; two runs in a row give 0 then 1, since assignment is sequential and wraps",
-        "requests": [{ "label": "final-save", "status": 201, "ok": true, "source": "page" }],
-        "notes": ["a note saying the /api/condition request was made inside datapipe-client"]
+        "requests": [
+          { "label": "condition", "status": 200, "ok": true, "source": "library" },
+          { "label": "session", "status": 200, "ok": true, "source": "library" },
+          { "label": "final-save", "status": 201, "ok": true, "source": "page" }
+        ],
+        "notes": ["a note saying the `condition` and `session` entries' status is reconstructed from datapipe-client's return value/outcome, not observed on the wire"]
       },
       "expectDashboard": ["Nothing specific; the condition counter is not surfaced in the UI."],
       "expectStorage": {
@@ -448,9 +459,9 @@
       "expectPage": {
         "status": "aborted",
         "trials": "trialsCompleted === 0, trialsPlanned === 10 -- nothing ran",
-        "requests": [],
+        "requests": [{ "label": "condition", "status": 400, "ok": false, "source": "library", "error": "a message containing \"(HTTP 400)\" and CONDITION_ASSIGNMENT_NOT_ACTIVE" }],
         "notes": ["a note beginning \"getCondition threw\""],
-        "serverSide": "POST /api/condition answers 400 with error CONDITION_ASSIGNMENT_NOT_ACTIVE. The page cannot see the status directly, because datapipe-client throws rather than returning it -- confirm the code with the direct probe in the skill's endpoint table if it matters."
+        "serverSide": "POST /api/condition answers 400 with error CONDITION_ASSIGNMENT_NOT_ACTIVE. The page cannot see the raw response, but the `condition` entry's status is parsed out of datapipe-client's thrown error message, which embeds the real HTTP status -- confirm the code with the direct probe in the skill's endpoint table if it matters."
       },
       "expectDashboard": ["A new rejections-panel entry with the code CONDITION_ASSIGNMENT_NOT_ACTIVE. Only visible while the upload queue is empty."],
       "expectStorage": { "files": 0, "countBy": "n/a", "naming": "n/a", "completeness": "nothing is written", "location": "n/a" },
@@ -608,7 +619,7 @@
       "runAfter": ["abandoned-tab", "failed-final-submission"],
       "runAfterCondition": "each of those scenarios' partials is visible as a queue entry in GET /api/queuestatus?experimentID=<id>",
       "automation": "agent",
-      "observed": "2026-09-19: `datapipe: session not started (HTTP 400)` then final save 400 DATA_COLLECTION_NOT_ACTIVE. PASS -- but running it early is what destroyed the failed-final-submission recovery in that run."
+      "observed": "2026-09-19: `datapipe: session not started (HTTP 400)` then final save 400 DATA_COLLECTION_NOT_ACTIVE. PASS -- but running it early is what destroyed the failed-final-submission recovery in that run. 2026-09-20: confirmed by a direct `POST /api/data` probe rather than through this page -- `{\"error\":\"DATA_COLLECTION_NOT_ACTIVE\",\"message\":\"Data collection is not active for this experiment\"}`, HTTP 400, at 00:01:45.5Z -- and it WAS logged to the rejections panel (\"One submission to this experiment was rejected... The most recent was just now.\", exactly one row), confirming a closed-experiment refusal is not silently dropped. PASS for the endpoint and the dashboard; the page path itself was not re-run."
     }
   ]
 }

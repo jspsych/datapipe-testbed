@@ -150,12 +150,18 @@ export function readParams() {
 //
 // Mirrored twice, because drivers differ in what they can do: `window.__testbed`
 // for anything that can evaluate JavaScript, and the DOM for anything that
-// cannot -- `data-testbed-status`, `data-testbed-trials-completed` and
-// `data-testbed-trials-planned` on `<html>`, plus the full JSON in
-// `#testbed-result`. **The DOM is the primary interface.** A browser extension
-// evaluates JavaScript in an isolated world and may not see a page global at
-// all; `window.__testbed` is a convenience for same-world drivers such as
-// Playwright.
+// cannot -- `data-testbed-schema`, `data-testbed-status`,
+// `data-testbed-trials-completed` and `data-testbed-trials-planned` on
+// `<html>`, plus the full JSON in `#testbed-result`. **The DOM is the primary
+// interface.** A browser extension evaluates JavaScript in an isolated world
+// and may not see a page global at all; `window.__testbed` is a convenience
+// for same-world drivers such as Playwright.
+//
+// `data-testbed-schema` is read FIRST, before anything else here is trusted:
+// it is a one-line DOM check for which contract a driver is about to rely on,
+// rather than a JSON parse of #testbed-result just to find that out. Fall
+// back to the JSON's `schema` field if the attribute is ever absent (an older
+// published page), then to schema-1 behaviour if neither is there.
 //
 // WHAT IS DELIBERATELY MISSING. `requests` holds only the requests the PAGE
 // issues -- `source: "page"`. The extension and datapipe-client make their own
@@ -193,6 +199,12 @@ const TERMINAL = ["finished", "failed", "aborted"];
 function publish() {
   window.__testbed = result;
   const dom = document.documentElement.dataset;
+  // Mirrored first, and on its own, so a driver can learn which contract it is
+  // about to trust with a single DOM read -- `data-testbed-schema` -- instead
+  // of parsing #testbed-result's JSON just to find out. A driver should still
+  // fall back to the JSON's `schema` field if this attribute is ever absent
+  // (an older published page), and to schema-1 behaviour if neither is there.
+  dom.testbedSchema = String(result.schema);
   dom.testbedStatus = result.status;
   dom.testbedTrialsCompleted = String(result.trialsCompleted);
   dom.testbedTrialsPlanned = String(result.trialsPlanned);
