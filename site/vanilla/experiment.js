@@ -183,16 +183,49 @@ async function main() {
     // The one call in this library that throws. A condition decides which
     // timeline a participant runs, so there is no safe value to fall back to;
     // catching it and showing something is the documented pattern.
+    //
+    // datapipe-client does not hand back a Response for this call, so the
+    // entry below is RECONSTRUCTED from what the page can observe -- the
+    // return value or the thrown error -- not read off the wire. `ms` still
+    // times the real round trip, because it wraps the whole await.
+    const conditionStartedAt = performance.now();
     try {
       const condition = await DataPipe.getCondition({ experimentID: params.experiment });
+      const ms = Math.round(performance.now() - conditionStartedAt);
       log(`condition assigned: ${condition}`);
       setCondition(condition);
+      recordRequest({
+        label: "condition",
+        url: endpointURL(params.base, "condition"),
+        source: "library",
+        inferred: true,
+        status: 200,
+        ok: true,
+        ms,
+      });
       noteResult(
-        "POST /api/condition was made inside datapipe-client; per-request " +
-          "detail is unavailable. A non-null `condition` means it returned 200."
+        "POST /api/condition was made inside datapipe-client; per-request detail is " +
+          "not observed on the wire. The `condition` entry above is reconstructed: " +
+          "status 200 is what a returned (non-null) condition implies, not a status " +
+          "read off a response."
       );
     } catch (error) {
+      const ms = Math.round(performance.now() - conditionStartedAt);
+      // getCondition() embeds the real HTTP status in its message when it has
+      // one ("...(HTTP 400)..."); parsed here rather than guessed. 0 means
+      // the request never reached DataPipe at all (offline, DNS, CORS).
+      const status = Number(/\(HTTP (\d+)\)/.exec(error.message)?.[1]) || 0;
       log("getCondition THREW -- the designed behaviour on failure", error);
+      recordRequest({
+        label: "condition",
+        url: endpointURL(params.base, "condition"),
+        source: "library",
+        inferred: true,
+        status,
+        ok: false,
+        ms,
+        error: error.message,
+      });
       target.innerHTML =
         '<p class="notice">The experiment could not be started: no condition was assigned.</p>';
       noteResult(`getCondition threw (${error.name}: ${error.message}); no trials were run`);
@@ -211,11 +244,46 @@ async function main() {
       ? "streaming ON -- trials are staged as they happen"
       : "streaming OFF -- one submission at the end"
   );
-  if (params.stream) {
+  if (session) {
+    // Record the /api/session round trip by WATCHING, never by calling into the
+    // client. The obvious hook -- an early `session.flush()`, which waits for
+    // the start to settle -- is not the no-op it looks like: flush() cancels
+    // the pending flush timer and then writes whatever is buffered, so if the
+    // participant starts before the round trip lands it flushes the first few
+    // trials early and changes the very batching this page exists to exercise.
+    // Reading the public `sessionId` property on a timer starts no request and
+    // touches no state. `ms` is therefore accurate to the polling interval, and
+    // the status is inferred -- see `inferred` and the note below.
+    const sessionStartedAt = performance.now();
+    const SESSION_POLL_MS = 100;
+    const SESSION_GIVE_UP_MS = 30000;
+    const sessionWatch = setInterval(() => {
+      const elapsed = Math.round(performance.now() - sessionStartedAt);
+      const started = Boolean(session.sessionId);
+      if (!started && elapsed < SESSION_GIVE_UP_MS) return;
+      clearInterval(sessionWatch);
+      recordRequest({
+        label: "session",
+        url: endpointURL(params.base, "session"),
+        source: "library",
+        inferred: true,
+        status: started ? 200 : 0,
+        ok: started,
+        ms: elapsed,
+        ...(started
+          ? {}
+          : {
+              error:
+                "no sessionId after 30 s; see the mirrored `datapipe:` warning note for the real reason/status",
+            }),
+      });
+    }, SESSION_POLL_MS);
     noteResult(
-      "POST /api/session and the staging writes happen inside datapipe-client; " +
-        "per-request detail is unavailable. A non-null `sessionId` below means " +
-        "/api/session returned 200."
+      "POST /api/session and the staging writes happen inside datapipe-client; per-request " +
+        "detail is not observed on the wire. The `session` entry is INFERRED (`inferred: true`) " +
+        "from the public `sessionId` property becoming non-empty: status 200 is what that " +
+        "implies, `ms` is accurate to 100 ms, and a failure's real HTTP status, when there is " +
+        "one, is in the mirrored `datapipe:` warning instead."
     );
   }
 
