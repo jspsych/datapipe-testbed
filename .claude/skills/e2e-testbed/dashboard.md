@@ -88,7 +88,8 @@ the accessible name. Wait for the "Saved" badge before moving on.
 | **"Stop after a set number of sessions"** | session-cap checks |
 
 Turning conditions on reveals a number field **"How many conditions?"**
-(minimum 2), which autosaves with its own "Saved" flag. Triple-click, type, Tab.
+(minimum 2), which autosaves with its own "Saved" flag. It opens showing `1` —
+below its own minimum — so it must always be set: triple-click, type, Tab.
 
 On failure the switch snaps back and shows a sentence beginning "Could not
 change data collection…". If the experiment is finalized the switch is disabled
@@ -123,8 +124,8 @@ shows the **"N sessions in progress"** chip whenever `inProgressCount > 0` OR
 (`logs.startSession > 0 && data.active && !data.finalized`) — so a collecting,
 streaming experiment shows **"0 sessions in progress"** with no session open
 at all, once any session has ever started. Never treat this chip as the
-assertion for "no live sessions"; use the panel's presence (or the row
-matching the scenario's `run` id) instead.
+assertion for "no live sessions"; use the panel's presence (or the row for
+the scenario's run — see below for how to pick it out) instead.
 
 Exact status strings, in the sequence a dropped connection moves through them:
 
@@ -135,8 +136,12 @@ Exact status strings, in the sequence a dropped connection moves through them:
 
 **Never assert on the NUMBER of sessions in progress.** Loading the jsPsych page
 opens a session before any trial runs, so a page opened and navigated away from
-leaves a row behind until the sweep clears it. Match the row belonging to the
-scenario's `run` id instead.
+leaves a row behind until the sweep clears it. Pick out the scenario's row
+instead — and note what the row does NOT offer: its only columns are `Status`,
+`Running for` and `Started`, with no filename and no `run` id. Match `Started`
+against the run's `startedAt` from the result contract. That is unambiguous only
+while no two sessions start in the same minute, so do not start two streaming
+runs within a minute of each other.
 
 "Running for" renders as `under a minute`, `<n> min`, `<h> h <m> min` or
 `<h> h`. Above 25 rows a footer reads "<n> more sessions are in progress and
@@ -305,9 +310,11 @@ text is **"Open folder"**, opening
 "Dataverse Dataset" / "Open dataset". Zenodo: "Zenodo Deposition" / "Open
 deposition".)
 
-With Psych-DS metadata on, raw submissions go to `<title>/data/raw/` and the
-folder also holds derived CSVs (`subject-…_data.csv`, one per upload) plus
-`dataset_description.json`. With it off, everything is at the folder root.
+With Psych-DS metadata on the layout is three levels: `<title>/` holds
+`dataset_description.json`, `.psychds-ignore` and `data/`; `<title>/data/` holds
+the derived CSVs (`subject-…_data.csv`, one per upload); `<title>/data/raw/`
+holds the raw submissions and recovered partials, and nothing else. With it
+off, everything is at the folder root.
 Base64 uploads always go to the root — `/api/base64` applies no Psych-DS layout
 and runs no metadata block.
 
@@ -366,7 +373,16 @@ copies as a known issue only on that older build, not as a finding.
 - **`get_page_text` is unreliable in two places.** It is intermittently
   refused on `jspsych.github.io`, and can return "No text content found" on
   the dashboard immediately after a hard reload (working again once the page
-  settles). `document.body.innerText` works reliably on both.
+  settles). `document.body.innerText` is the fallback, and it is not reliable
+  either: on the dashboard it can come back `[BLOCKED: Cookie/query string
+  data]` while `get_page_text` succeeds. Treat the two as fallbacks for each
+  other. Neither works on Google Drive; read its rows from the DOM
+  (`[role="row"][data-id]` and the descendant `aria-label`).
+- **The extension redacts what LOOKS sensitive, not only what is.** A result
+  object with a key such as `sessions` or `getSession` comes back `[BLOCKED:
+  Sensitive key]`, and a dotted base64-ish string (a `.b64.txt` filename) as
+  `[BLOCKED: JWT token]`. Rename keys before returning them, and return such
+  filenames piecewise or by length.
 - **Firebase ID tokens expire after about an hour.** A poller holding a
   captured token will start getting `401
   {"error":"Invalid authentication token"}` once it does. Re-read the token
@@ -416,7 +432,7 @@ Use these to size waits, not as assertions.
 |---|---|
 | jsPsych page, `auto=1` | 1.1–1.7 s per trial |
 | Vanilla page, `auto=1` | 400 ms per trial |
-| `POST /api/data` that writes to Drive | 2–4.5 s (occasionally up to ~5 s on a vanilla-page save) |
+| `POST /api/data` that writes to Drive | 2–5.5 s |
 | `POST /api/createexperiment` | about 1.3 s |
 | Warm `dashboardapi` calls | 190–370 ms |
 | Refusals that never reach a provider | 270–480 ms |
