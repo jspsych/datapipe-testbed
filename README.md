@@ -94,8 +94,9 @@ produces a result a driver can assert on instead of prose to read.
 
 A free-form id for one run. It is echoed into the result below **and into the
 filename**, which is the part of a run that outlives the tab: it is how you
-recognise a file — or, an hour later, a recovered `.partial.json` — as having
-come from a particular scenario.
+recognise a file — or, ten to fifteen minutes later, a recovered
+`.partial.json` (up to an hour on an older deployment) — as having come from a
+particular scenario.
 
 ### The result contract
 
@@ -316,15 +317,19 @@ any session still staged, so running it early destroys the recoveries the
 `deferredCheck` scenarios are waiting on. `mustRunLast`, `runAfter` and
 `mutatesExperimentState` say which scenarios constrain which.
 
-Scenarios marked `deferredCheck` cannot finish inside a normal run: a recovered
-partial session is *queued* by the five-minute sweep and its first upload
-attempt is an hour later, so the file appears in storage roughly 65–75 minutes
-after the participant dropped out. `deferredNote` says what to look for and
-when.
+Scenarios marked `deferredCheck` still need a real wait: a recovered partial
+session is *queued* by the five-minute sweep, and on the current deployment
+its first upload attempt runs on that same sweep tick, so the file appears in
+storage roughly ten to fifteen minutes after the participant dropped out — an
+older deployment still waits an hour for that first attempt, landing the file
+65–75 minutes out instead. `deferredNote` says what to look for and when, and
+how to tell which deployment you have.
 
-`preconditions` and `knownIssues` are worth reading before the first run. The
-one that bites hardest: on Google Drive a `.psychds-ignore` file accumulates
-per upload, so count files by filename stem, never by folder total.
+`preconditions` and `knownIssues` are worth reading before the first run. One
+that still bites: `.psychds-ignore` is claimed once per experiment now, but an
+experiment that predates the claim (or a deployment that predates it entirely)
+can still hold more than one copy, so count files by filename stem, never by
+folder total.
 
 Each scenario also carries a `verified` field instead of a run log:
 `"live"` means its page/dashboard/storage expectations have been confirmed

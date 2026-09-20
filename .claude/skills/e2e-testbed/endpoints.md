@@ -100,13 +100,15 @@ metadata generation failed, not that the participant's data was refused, and
 the policy is never to destroy raw data over it. Note that the retry worker
 re-checks `finalized` but **not** `active`.
 
-**Its `nextRetryAt` is `createdAt` + 1 minute, not +60 like a recovered
-partial** — it is queued at the next `:00`/`:15`/`:30`/`:45` pending-recovery
-slot after the probe, then attempted a minute after that, so it is visible in
-the dashboard queue panel for only about 5 minutes before its own first
-storage attempt. A recovered partial's `nextRetryAt` is `createdAt` + 60
-minutes — the two held reasons do not wait the same length of time, even
-though both render as kind `waiting`.
+**Its `nextRetryAt` is `createdAt` + 1 minute** — it is queued at the next
+`:00`/`:15`/`:30`/`:45` pending-recovery slot after the probe, then attempted a
+minute after that, so it is visible in the dashboard queue panel for only about
+5 minutes before its own first storage attempt. A recovered partial's
+`nextRetryAt` is its own `createdAt` on the current build (delivered the same
+sweep tick it is queued on, often invisible in the panel at all) or `createdAt`
++ 60 minutes on an older one — either way the two held reasons do not
+necessarily wait the same length of time, even though both render as kind
+`waiting`.
 
 ## `POST /api/base64`
 

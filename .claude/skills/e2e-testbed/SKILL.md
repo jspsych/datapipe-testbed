@@ -86,11 +86,12 @@ the home page (result contract absent too — see §5 — every scenario is `aut
 
 **Run them in `order`. This is not a preference.** Switching data collection off makes the
 staging sweep **discard** anything still staged (`scheduled-staging-sweep.ts`, "THE SECOND
-DOOR"), so running `closed-experiment` before the recovery scenarios' partials are queued
-destroys them and reports a recovery bug that does not exist. Before any `mustRunLast`
-scenario, check its `runAfterCondition`: for `closed-experiment`, `GET
-/api/queuestatus?experimentID=<id>` must already list an entry for each id in its
-`runAfter`. If not, wait, or use a second throwaway experiment.
+DOOR"), so running `closed-experiment` before recovery has actually happened destroys the
+scenarios' partials and reports a bug that does not exist. Before any `mustRunLast`
+scenario, check its `runAfterCondition`: for `closed-experiment`, each `runAfter` id needs
+its live-session row gone and its partial listed or already `completed`/gone in `GET
+/api/queuestatus?experimentID=<id>` — a recovered partial can clear the queue within
+seconds, so "gone" counts too. If not yet true, wait, or use a second throwaway experiment.
 
 Skip `"manual"` unless asked — today only `brief-dropout`: the browser extension cannot
 turn the network off, and the testbed has no fake for it.
@@ -146,9 +147,9 @@ For each scenario in the manifest:
    expectations.
 8. Check `expectStorage` in the Drive folder tab, per the scenario's
    `countBy`: **count files by the scenario's filename stem, never the folder total.** A
-   `.psychds-ignore` accumulates once per upload on Drive (known issue). With metadata on,
-   raw files sit under `data/raw/` with a derived `subject-…_data.csv` beside each. Then
-   close the scenario's tab.
+   `.psychds-ignore` is claimed once per experiment and written at most once now (rarely
+   twice; see `knownIssues`). With metadata on, raw files sit under `data/raw/` with a
+   derived `subject-…_data.csv` beside each. Then close the scenario's tab.
 
 **Learn the schema before relying on any of this.** Read `data-testbed-schema` off
 `<html>` first — a one-line DOM check, no JSON parse needed; fall back to the JSON's
@@ -196,20 +197,19 @@ blank reads as "clean", and §2's function inventory goes unverified with it.
 
 ## 9. Deferred checks
 
-Scenarios with `deferredCheck: true` cannot finish inside a run. The staging sweep only
-**queues** a recovered session, and a queue entry with no provider error code waits an
-hour for its first attempt — so a `.partial.json` lands in storage roughly **65–75
-minutes** after the dropout, not 15. Until then the queue panel lists it **"Waiting to be
-stored"**, `retryCount: 0`, `lastAttemptAt: null` — not a failed upload. A recovered
-session is typically queued about ten to fifteen minutes after the tab closes (the
-abandonment grace period plus the next 5-minute sweep), with `nextRetryAt` set to
-`createdAt` + 60 minutes exactly. **Trials still staged but not yet flushed when the tab
-dies are lost**, so when polling `trialsCompleted` to act "at trial N", expect the
-recovered partial to hold a few fewer trials than N.
+Scenarios with `deferredCheck: true` need a real wait before their storage check — the
+staging sweep only **queues** a recovered session, needing the abandonment grace period
+plus the next 5-minute tick regardless of build. The current build delivers that entry on
+the SAME tick (`nextRetryAt = createdAt`), so storage lands roughly **ten to fifteen
+minutes** after the dropout — often absorbed by later scenarios in `order`, so check near
+`closed-experiment` rather than scheduling a return visit. An OLDER BUILD instead waits
+`createdAt` + 60 min, landing **65–75 minutes** later; compare the two in `GET
+/api/queuestatus` to tell which you have. Trials staged but not yet flushed when the tab
+dies are lost, so expect the recovered partial a few trials short of N.
 
-A `METADATA_ERROR` probe is the tightest window: its kept copy is queued at the next
-`:00`/`:15`/`:30`/`:45` slot once older than 15 minutes, with `nextRetryAt` = `createdAt`
-+ **1 minute** (not +60 like a recovered partial), so visible only **about 5 minutes**.
+A `METADATA_ERROR` probe is unaffected: its kept copy is queued at the next
+`:00`/`:15`/`:30`/`:45` slot once older than 15 minutes, `nextRetryAt = createdAt` + **1
+minute**, visible only **about 5 minutes**.
 
 Record, per deferred scenario: the filename stem, the folder, the wall-clock time to
 check. Mark it `DEFERRED`, never `PASS`. **Before reporting a finding, read "Known issues
@@ -238,12 +238,12 @@ growing back here.
 
 - Switch **"Accept new data"** off, and any switch a scenario turned on.
   **This is only safe once §4's `runAfterCondition` is satisfied for every recovery
-  scenario you ran** — every entry it queues must already be visible in `GET
-  /api/queuestatus` — because the sweep discards staged sessions of an experiment that is
-  not collecting (§4). Note every setup change, such as the Psych-DS metadata toggle, so
-  the next reader knows the experiment is not in its default state.
+  scenario you ran** — its partial must actually be recovered, queued or already delivered,
+  not merely attempted — because the sweep discards staged sessions of an experiment that is
+  not collecting (§4). Note every setup change, such as the Psych-DS metadata toggle, so the
+  next reader knows the experiment is not in its default state.
 - **Do not delete the experiment or any stored file**, not even after the deferred checks
-  clear — the folder must stay intact for another hour, and deleting an e2e experiment is
+  clear — the folder must stay intact until they do (§9), and deleting an e2e experiment is
   always a deliberate, separate decision, never part of a run.
 - Close the tabs you opened; leave the user's own alone. If the tooling
   refuses to close one — it dissolves its tab group once the others are gone — say which

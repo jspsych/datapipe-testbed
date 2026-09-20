@@ -198,7 +198,10 @@ memory limit" — see endpoints.md.
   under the status **label**, not the icon (`ms={6}` = icon width + gap), and
   reads **"First attempt in `<n>`"** for a `waiting` row (`"First attempt
   within 5 minutes"` once `nextRetryAt` is in the past) or **"Next retry in
-  `<n>`"** for `retrying`. Forms seen: `in 1h`, `in 59m`, `in 1m`.
+  `<n>`"** for `retrying`. Forms seen: `in 1h`, `in 1m`. A recovered partial's
+  `nextRetryAt` is its own `createdAt` now, so its sub-line is normally only
+  visible for the few seconds before the same sweep tick delivers it — often
+  not at all; an older build still shows `in 1h` counting down from it.
 - **"Download all as ZIP"** sits right-aligned, directly above the table,
   flush with the table's right edge.
 - A row's per-row download is `GET
@@ -226,9 +229,14 @@ dashboard panel itself now makes that distinction (waiting vs. retrying). See
 
 **Rendered only while the upload queue is empty.** The parent hides it whenever
 anything is queued, so any assertion about a rejection has to be made before a
-recovery scenario queues a partial — and that partial's first storage attempt
-is an hour after it was queued, so the panel stays away for roughly **1 h 5
-min**.
+recovery scenario queues a partial — or after it has been delivered. On the
+current build a recovered partial's own first storage attempt runs on the SAME
+sweep tick that queues it, so the panel is usually hidden only as long as that
+entry stays `pending`/`processing` — seconds, not an hour. A deployment on an
+older build still waits an hour for that first attempt (`nextRetryAt =
+createdAt + 60 min`), and the panel stays away for roughly **1 h 5 min**
+there; compare the entry's `nextRetryAt` to its `createdAt` in `GET
+/api/queuestatus` to tell which you have.
 
 A quiet `SectionPanel` with a **3px `status.error` left border** — an accent,
 not a fill. Do not look for `role="alert"`. The headline icon is
@@ -303,12 +311,20 @@ folder also holds derived CSVs (`subject-…_data.csv`, one per upload) plus
 Base64 uploads always go to the root — `/api/base64` applies no Psych-DS layout
 and runs no metadata block.
 
-**Count files by the scenario's filename stem, never by folder total.** A
-`.psychds-ignore` accumulates **one per successful upload** rather than one per
-experiment: `metadata-derived-upload.ts` dedupes on the provider's
-`NAME_CONFLICT`, and Drive permits duplicate names, so the dedupe never fires —
-N uploads leave N copies. A pre-existing DataPipe bug — report it as a known
-issue, not a finding.
+**Count files by the scenario's filename stem, never by folder total.**
+`.psychds-ignore` is now claimed once per experiment (`psychds-ignore-claim.ts`'s
+`psychdsIgnoreWrittenAt` on the experiment document) and written at most once:
+the first submission that finds the claim unset wins it and writes the file;
+every later submission drops it before the request reaches the provider. An
+experiment that already held one or more copies from before this claim existed
+still gets exactly ONE more on its next submission, then stops for good. A
+claim the transaction cannot decide (contention on a hot experiment document)
+writes the file anyway rather than failing the submission, so an occasional
+extra copy is still possible and harmless. A deployment on an older build has
+no claim at all and still writes one copy per successful upload —
+`metadata-derived-upload.ts` dedupes on the provider's `NAME_CONFLICT`, and
+Drive permits duplicate names, so the dedupe never fires there. Report multiple
+copies as a known issue only on that older build, not as a finding.
 
 ## What the browser tooling cannot do
 
@@ -407,7 +423,7 @@ Use these to size waits, not as assertions.
 | `dashboardapi` cold start, clean deploy | ~745 ms |
 | `dashboardapi` cold start, click landed in the last moments of a deploy | up to about 18 s — wait ~1 min after "Deploy to Test" completes |
 | Abandoned tab → queue entry | about ten to fifteen minutes |
-| Queue entry (recovered partial) → first Drive attempt | `createdAt` + 60 min exactly |
+| Queue entry (recovered partial) → first Drive attempt | `createdAt` (immediate; same sweep tick) on the current build — `createdAt` + 60 min exactly on an older one |
 | `METADATA_ERROR` refusal → its kept copy queued | at the next `:00`/`:15`/`:30`/`:45` slot, roughly 15–30 min after the probe |
 | That metadata-kept entry → its own first attempt | `createdAt` + **1 min** (not +60 like a recovered partial), so visible in the queue only ~5 min |
 | `POST /api/clearerrors` round trip | > 10 s, up to ~16 s — a slow round trip, not a broken button |

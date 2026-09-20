@@ -49,7 +49,7 @@ For each `FAIL`, underneath the table:
 
 | Scenario | Look for | In | Not before |
 |---|---|---|---|
-| `abandoned-tab` | `testbed-abandoned-tab-…-<8 hex>.partial.json` | `My Drive/DataPipe/e2e-…` | <HH:MM> (75 min after the tab closed) |
+| `abandoned-tab` | `testbed-abandoned-tab-…-<8 hex>.partial.json` | `My Drive/DataPipe/e2e-…` | <HH:MM> (10-15 min after the tab closed on the current build; 75 min on an older one) |
 
 ## Endpoint probes
 
@@ -77,7 +77,9 @@ the only source for `retryCount` and `lastAttemptAt`.
 | | | | | | |
 
 Entries with `retryCount: 0` and `lastAttemptAt: null` have never been
-attempted. That is the expected state for the first hour.
+attempted — expected for a recovered partial until its first attempt, which on
+the current build is the same sweep tick that queues it (so this state is
+often too brief to catch) and on an older build is up to an hour later.
 
 ## Server-side
 
@@ -103,8 +105,8 @@ from [endpoints.md](endpoints.md). If the manifest is wrong, say so — it is
 meant to be corrected.
 
 **Check the manifest's `knownIssues` before writing anything here.** The
-`METADATA_ERROR` payloads that reappear in the queue, the per-upload
-`.psychds-ignore` files, and live-session rows from pages that never ran a
+`METADATA_ERROR` payloads that reappear in the queue, an occasional extra
+`.psychds-ignore` copy, and live-session rows from pages that never ran a
 trial are all known and expected. Reporting them as findings wastes a day of
 triage for whoever reads the report.
 

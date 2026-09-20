@@ -67,13 +67,19 @@ list. Each scenario says what the dashboard and the storage folder should look
 like and when.
 
 One timing is worth knowing before it surprises you: an abandoned session is
-recovered by the five-minute sweep, but the sweep only **queues** it. A queue
-entry with no provider error code waits an hour for its first upload attempt,
-so a `.partial.json` reaches storage roughly 65–75 minutes after the dropout.
-In the meantime the dashboard's queue panel shows it as **"Waiting to be
-stored"** — DataPipe has recovered the data but has not tried to upload it
-yet, which is what actually happened; it is no longer described as a failed
-or retrying upload. That is expected.
+recovered by the five-minute sweep, but the sweep only **queues** it — a
+separate pass, upload retry, actually delivers it. On the current build both
+passes run in the same sweep invocation and the queued entry's first attempt
+is immediate, so a `.partial.json` reaches storage within the same
+ten-to-fifteen-minute window the recovery itself takes, and the queue entry is
+often gone again within seconds. A deployment running an older build still waits an
+hour for that first attempt, so storage lands roughly 65–75 minutes after the
+dropout; compare the entry's `nextRetryAt` to its `createdAt` in `GET
+/api/queuestatus` to tell which you have. Either way, while it is still
+queued the dashboard's queue panel shows it as **"Waiting to be stored"** —
+DataPipe has recovered the data but has not tried to upload it yet, which is
+what actually happened; it is no longer described as a failed or retrying
+upload. That is expected.
 
 And one ordering rule: **switch data collection off last.** While an experiment
 is not `active`, the staging sweep *discards* every session still staged for it
@@ -99,11 +105,16 @@ the same list as `knownIssues` so a driver does not flag them.
   retry or a failure — accurate, since DataPipe has never attempted a provider
   write for it. Note also that the retry worker re-checks `finalized` but not
   `active` — that gap is unchanged by this.
-- **One `.psychds-ignore` per upload on Google Drive**, rather than one per
-  experiment. `metadata-derived-upload.ts` dedupes on the provider's
-  `NAME_CONFLICT`, and Drive permits duplicate names, so the dedupe never
-  fires. Harmless but untidy, and it means file counts must be taken by
-  filename pattern rather than folder total.
+- **`.psychds-ignore` is written at most once per experiment** now (a Firestore
+  claim, `psychdsIgnoreWrittenAt`, on the experiment document —
+  psychds-ignore-claim.ts). An experiment that already held a copy from before
+  this claim existed gets exactly one more on its next submission, then stops;
+  a claim the transaction cannot decide writes the file anyway, so an
+  occasional extra copy is still possible and harmless. File counts still must
+  be taken by filename pattern rather than folder total. A deployment on an
+  older build has no claim and still writes one copy per upload —
+  `metadata-derived-upload.ts` dedupes on the provider's `NAME_CONFLICT`, and
+  Drive permits duplicate names, so the dedupe never fires there.
 - **Assert on `error`, never on `message`.** `metadata-block.ts` returns
   `{...MESSAGES.METADATA_ERROR, message: errorMessage}`, replacing the message
   with the specific failure text — so the wire message is not the string in
@@ -117,11 +128,13 @@ the same list as `knownIssues` so a driver does not flag them.
   the first keypress still leaves a live-session row behind. Never assert on
   the number of sessions in progress.
 - **The rejections panel is hidden while anything is queued.** It is not
-  missing; the parent renders one panel or the other. Since a recovered
-  partial waits an hour for its first storage attempt, checking a rejection
-  after a recovery scenario means waiting roughly 1 h 5 min for the queue to
-  drain. Check rejections *before* the recovery scenarios, or read the
-  refusal's status code from the page's own result instead.
+  missing; the parent renders one panel or the other. On the current build a
+  recovered partial's queue entry is usually gone within seconds, so the panel
+  reappears quickly; on an older build its first storage attempt still waits
+  an hour, so checking a rejection after a recovery scenario there means
+  waiting roughly 1 h 5 min for the queue to drain. Either way, check
+  rejections *before* the recovery scenarios, or read the refusal's status
+  code from the page's own result instead.
 - **`sessionId` is null on every jsPsych-page run.**
   `@jspsych/extension-pipe` 0.2.0 exposes no public way to read the session it
   opened — the testbed says so in `notes` rather than reaching into the
@@ -183,8 +196,10 @@ that actually breaks on a deploy.
   does not exist and should not be invented for a test.
 - **Tab close and network toggling** — `abandoned-tab` and `brief-dropout`.
   Playwright can do both (`page.close()`, `context.setOffline(true)`), but the
-  assertion that matters is the recovered partial in storage 75 minutes later,
-  which no per-deploy job should wait for. `brief-dropout` is the interesting
+  assertion that matters is the recovered partial in storage, which lands
+  roughly ten to fifteen minutes later on the current build (up to 75 minutes
+  on an older one) — either way, no per-deploy job should wait for it.
+  `brief-dropout` is the interesting
   one: a browser extension cannot go offline at all, so a headless job is the
   *only* way that scenario ever runs unattended. It is marked `manual` in the
   manifest for exactly that reason.
