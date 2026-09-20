@@ -77,6 +77,16 @@ reach `INVALID_DATA` without editing the experiment.
 
 ## Driving it
 
+Three things in this repo exist for driving the testbed rather than using it by
+hand: the scenario manifest (`site/scenarios.json`, described below), the driver
+runbook — a Claude Code skill in `.claude/skills/e2e-testbed/`, run with
+`/e2e-testbed` from a session started in this checkout — and `runs/`, the
+reports those runs produce. [`docs/e2e-testing.md`](docs/e2e-testing.md) is the
+overview. DataPipe itself lives in
+[`jspsych/datapipe`](https://github.com/jspsych/datapipe); nothing about testing
+it end to end is kept there.
+
+
 The pages are also meant to be run by an agent or a headless job, so a run
 produces a result a driver can assert on instead of prose to read.
 
