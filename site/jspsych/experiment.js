@@ -235,12 +235,12 @@ if (requireExperiment(params)) {
         error: response.ok ? undefined : (body?.error ?? body),
       });
 
-      // STOP if the claim did not land. Observed against datapipe-test on
-      // 2026-09-19: the old pre-claim body was a plain sentence, which a
-      // Psych-DS experiment refuses with METADATA_ERROR before the name is
-      // ever taken. The run then went on to SUCCEED, and the scenario
-      // reported a pass while testing nothing it claimed to test. A run whose
-      // pre-claim failed is meaningless, so it ends here and says so.
+      // STOP if the claim did not land. A pre-claim body that is not valid
+      // CSV/JSON (e.g. a plain sentence) is refused with METADATA_ERROR by a
+      // Psych-DS experiment before the filename is ever taken -- and if the
+      // scenario went on regardless, it would SUCCEED while testing nothing
+      // it claimed to test. A run whose pre-claim failed is meaningless, so
+      // it ends here and says so.
       if (!response.ok) {
         const detail = body?.error ?? response.status;
         log(`  breaksave ABORTED: the filename was not claimed (${detail})`);
