@@ -198,6 +198,7 @@ async function main() {
         label: "condition",
         url: endpointURL(params.base, "condition"),
         source: "library",
+        inferred: true,
         status: 200,
         ok: true,
         ms,
@@ -219,6 +220,7 @@ async function main() {
         label: "condition",
         url: endpointURL(params.base, "condition"),
         source: "library",
+        inferred: true,
         status,
         ok: false,
         ms,
@@ -243,39 +245,45 @@ async function main() {
       : "streaming OFF -- one submission at the end"
   );
   if (session) {
-    // Time and record the /api/session round trip WITHOUT reaching into
-    // DataPipeSession's private state or calling its internal, non-public
-    // start() directly (see session.ts's own comment on why that stays
-    // internal). `flush()` is public API, and called here -- before any trial
-    // has been recorded, so the buffer is empty -- it does exactly one useful
-    // thing per its own doc comment: wait for the start round trip to settle,
-    // then return without writing anything. Runs in the background; the trial
-    // loop below does not wait for it, same as the page always has.
+    // Record the /api/session round trip by WATCHING, never by calling into the
+    // client. The obvious hook -- an early `session.flush()`, which waits for
+    // the start to settle -- is not the no-op it looks like: flush() cancels
+    // the pending flush timer and then writes whatever is buffered, so if the
+    // participant starts before the round trip lands it flushes the first few
+    // trials early and changes the very batching this page exists to exercise.
+    // Reading the public `sessionId` property on a timer starts no request and
+    // touches no state. `ms` is therefore accurate to the polling interval, and
+    // the status is inferred -- see `inferred` and the note below.
     const sessionStartedAt = performance.now();
-    session.flush().then(() => {
-      const ms = Math.round(performance.now() - sessionStartedAt);
+    const SESSION_POLL_MS = 100;
+    const SESSION_GIVE_UP_MS = 30000;
+    const sessionWatch = setInterval(() => {
+      const elapsed = Math.round(performance.now() - sessionStartedAt);
+      const started = Boolean(session.sessionId);
+      if (!started && elapsed < SESSION_GIVE_UP_MS) return;
+      clearInterval(sessionWatch);
       recordRequest({
         label: "session",
         url: endpointURL(params.base, "session"),
         source: "library",
-        status: session.enabled ? 200 : 0,
-        ok: session.enabled,
-        ms,
-        ...(session.enabled
+        inferred: true,
+        status: started ? 200 : 0,
+        ok: started,
+        ms: elapsed,
+        ...(started
           ? {}
           : {
               error:
-                "session did not start; see the mirrored `datapipe:` warning note for the real reason/status",
+                "no sessionId after 30 s; see the mirrored `datapipe:` warning note for the real reason/status",
             }),
       });
-    });
+    }, SESSION_POLL_MS);
     noteResult(
       "POST /api/session and the staging writes happen inside datapipe-client; per-request " +
-        "detail is not observed on the wire. The `session` entry above is reconstructed " +
-        "from the client's `enabled`/`sessionId` outcome after an initial flush() settled " +
-        "the start round trip: status 200 is what success implies, and a failure's real " +
-        "HTTP status, when there is one, is in the mirrored `datapipe:` warning instead. " +
-        "A non-null `sessionId` below means /api/session returned 200."
+        "detail is not observed on the wire. The `session` entry is INFERRED (`inferred: true`) " +
+        "from the public `sessionId` property becoming non-empty: status 200 is what that " +
+        "implies, `ms` is accurate to 100 ms, and a failure's real HTTP status, when there is " +
+        "one, is in the mirrored `datapipe:` warning instead."
     );
   }
 

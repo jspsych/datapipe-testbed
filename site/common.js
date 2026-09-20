@@ -265,6 +265,11 @@ export function recordRequest({
   ok,
   ms = null,
   source = "page",
+  // True when `status` was not read off a response but deduced from what the
+  // library exposed afterwards (a returned condition, a non-empty sessionId).
+  // A field rather than a line in `notes`, so a driver asserting on a status
+  // can tell evidence from inference without parsing prose.
+  inferred = false,
   error,
 }) {
   result.requests.push({
@@ -275,6 +280,7 @@ export function recordRequest({
     ok: ok === undefined ? status >= 200 && status < 300 : ok,
     ms,
     source,
+    ...(inferred ? { inferred: true } : {}),
     ...(error === undefined ? {} : { error: String(error) }),
   });
   publish();

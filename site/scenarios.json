@@ -188,7 +188,7 @@
         "trials": "trialsCompleted === trialsPlanned === 20",
         "sessionId": "null at `ready` (the round trip has not landed yet), a non-empty string once it does -- this page, unlike the jsPsych one, can report it, as soon as it is set rather than only at the end",
         "requests": [
-          { "label": "session", "status": 200, "ok": true, "source": "library", "ms": "a real duration, timed around an initial flush() rather than read off the wire -- see README's `requests` section" },
+          { "label": "session", "status": 200, "ok": true, "source": "library", "inferred": true, "ms": "time until the public sessionId property became non-empty, to the nearest 100 ms -- inferred, not read off the wire; see README's `requests` section" },
           { "label": "final-save", "status": 201, "ok": true, "source": "page", "ms": "a real duration; the page issued this one itself" }
         ],
         "notes": ["a note saying the `session` entry's status is reconstructed from the client's outcome, not observed on the wire"]

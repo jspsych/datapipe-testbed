@@ -211,18 +211,20 @@ sent while the page unloads).
 That leaves two different situations for a request the page did not send
 itself, and they are NOT treated the same:
 
-- **The vanilla page calls a client function it can await and read the
-  outcome of** — `DataPipe.getCondition()` and (indirectly, via `flush()`)
-  the `/api/session` round trip `DataPipe.createSession()` starts in the
-  background. Neither hands the page a `Response`, so the page cannot see the
-  real HTTP status or the wire timing — but it CAN observe success/failure
-  and time the whole call. Those land in `requests` as `label: "condition"`
-  and `label: "session"`, `source: "library"`, a `ms` timed around the call
-  (not the request itself), and a **status the page infers, not reads**: 200
-  on success (implied by a returned condition, or by the session reporting
-  `enabled`), or the status parsed out of a thrown error's message when
-  there is one. A `notes` line on each says explicitly that the status is
-  reconstructed, not observed on the wire.
+- **The vanilla page can see the OUTCOME of two library requests, never the
+  requests themselves.** `DataPipe.getCondition()` is awaited, so the page
+  times the call and sees it return or throw. `DataPipe.createSession()`
+  starts `/api/session` in the background; the page watches the public
+  `sessionId` property on a 100 ms timer until it is non-empty (or 30 s pass).
+  It deliberately does NOT call an early `session.flush()` to wait for the
+  start: `flush()` cancels the pending flush timer and writes whatever is
+  buffered, so it would change the batching this page exists to exercise.
+  Both land in `requests` as `label: "condition"` / `label: "session"`,
+  `source: "library"`, **`inferred: true`**, a `ms` measured around the call
+  (condition) or to the nearest 100 ms (session), and a status the page
+  deduces rather than reads: 200 when a condition came back or a session id
+  appeared, otherwise the status parsed from the thrown error's message, or 0.
+  Assert on `inferred` entries as evidence of the outcome, not of the wire.
 - **Nothing at all is observable for a request the extension issues on the
   jsPsych page** — `POST /api/session`, the staging writes, and the final
   `POST /api/data` all happen inside `@jspsych/extension-pipe`, which keeps
