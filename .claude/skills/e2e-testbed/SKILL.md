@@ -140,16 +140,16 @@ For each scenario in the manifest:
 7. Check `expectDashboard` (live Firestore listeners — no refresh needed,
    but changes can lag a few seconds). Assert on the literal strings in
    [dashboard.md](dashboard.md), never a paraphrase, and **match the live-session row by
-   the scenario's `run` id — never assert on the session count or the header's "N sessions
-   in progress" chip**, which shows even at zero for a collecting, streaming experiment
+   its `Started` time against the run's `startedAt` (the row shows no filename or `run`
+   id) — never assert on the session count or the header's "N sessions in progress" chip**, which shows even at zero for a collecting, streaming experiment
    (merely loading the jsPsych page opens a session too). The rejections panel is hidden
    whenever anything is queued; [dashboard.md](dashboard.md) has both panels' concrete
    expectations.
 8. Check `expectStorage` in the Drive folder tab, per the scenario's
    `countBy`: **count files by the scenario's filename stem, never the folder total.** A
    `.psychds-ignore` is claimed once per experiment and written at most once now (rarely
-   twice; see `knownIssues`). With metadata on, raw files sit under `data/raw/` with a
-   derived `subject-…_data.csv` beside each. Then close the scenario's tab.
+   twice; see `knownIssues`). With metadata on, raw files are in `data/raw/` and the derived
+   `subject-…_data.csv` files one level up, in `data/`. Then close the scenario's tab.
 
 **Learn the schema before relying on any of this.** Read `data-testbed-schema` off
 `<html>` first — a one-line DOM check, no JSON parse needed; fall back to the JSON's
@@ -187,13 +187,13 @@ Call and token location: [endpoints.md](endpoints.md).
 
 If the Firebase MCP tools are authenticated, for the run's window: `functions_get_logs`
 for `apidata`, `participantapi`, `dashboardapi`, `scheduledsweep`, `compactiontask` (any
-`severity>=ERROR`); `logs/<experimentID>`'s
-`saveData`/`saveDataSucceeded`/`saveDataQueued` counters against what you submitted;
-`uploadQueue` filtered to the experiment.
+`severity>=ERROR`); `logs/<experimentID>`'s `saveData`/`saveDataSucceeded`/`saveDataQueued`
+counters against what you submitted; `uploadQueue` filtered to the experiment.
 
-**Not a gate, and often unavailable** — both the MCP tools and the local `firebase` CLI
-can return 401; do not log in. Record the section as **not observed** rather than blank:
-blank reads as "clean", and §2's function inventory goes unverified with it.
+**Not a gate, and often unavailable.** The MCP tools and the `firebase` CLI hold separate
+credentials, so after a 401 from one try the other (`npx firebase functions:list`,
+`functions:log --only <fn>`). Do not log in. Record **not observed**, never blank: blank
+reads as "clean", and §2's function inventory goes unverified with it.
 
 ## 9. Deferred checks
 
